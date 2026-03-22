@@ -42,32 +42,6 @@ def get_jibun_address(lat, lng):
         return {}
 
 
-def get_parcel_geometry(lng, lat):
-    """VWorld WFS로 필지 폴리곤 좌표 조회"""
-    url = "https://api.vworld.kr/req/wfs"
-    params = {
-        "SERVICE":     "WFS",
-        "VERSION":     "2.0.0",
-        "REQUEST":     "GetFeature",
-        "TYPENAME":    "lt_c_lhpllnd",   # 연속지적도
-        "SRSNAME":     "EPSG:4326",
-        "BBOX":        f"{lng-0.0003},{lat-0.0003},{lng+0.0003},{lat+0.0003},EPSG:4326",
-        "OUTPUT":      "application/json",
-        "EXCEPTIONS":  "application/json",
-        "KEY":         VWORLD_KEY,
-    }
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        data = resp.json()
-        features = data.get("features", [])
-        if not features:
-            return None
-        # 클릭 좌표와 가장 가까운 필지 선택
-        return features[0].get("geometry")
-    except Exception:
-        return None
-
-
 def get_building_title(sigungu_cd, bjdong_cd, bun, ji):
     url = "http://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo"
     params = {
@@ -82,13 +56,11 @@ def get_building_title(sigungu_cd, bjdong_cd, bun, ji):
     }
     try:
         resp  = requests.get(url, params=params, timeout=10)
-        data  = resp.json()
-        body  = data.get("response", {}).get("body", {})
+        body  = resp.json().get("response", {}).get("body", {})
         items = body.get("items", {})
-        if not items:
-            return []
-        item_list = items.get("item", [])
-        return [item_list] if isinstance(item_list, dict) else item_list
+        if not items: return []
+        il = items.get("item", [])
+        return [il] if isinstance(il, dict) else il
     except Exception:
         return []
 
@@ -107,13 +79,11 @@ def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
     }
     try:
         resp  = requests.get(url, params=params, timeout=10)
-        data  = resp.json()
-        body  = data.get("response", {}).get("body", {})
+        body  = resp.json().get("response", {}).get("body", {})
         items = body.get("items", {})
-        if not items:
-            return []
-        item_list = items.get("item", [])
-        return [item_list] if isinstance(item_list, dict) else item_list
+        if not items: return []
+        il = items.get("item", [])
+        return [il] if isinstance(il, dict) else il
     except Exception:
         return []
 
@@ -170,7 +140,7 @@ st.markdown("""
     <div style="font-size:2.4rem">🏢</div>
     <div>
         <h1>건축물대장 조회 서비스</h1>
-        <p>카카오맵에서 건물을 클릭하면 필지가 하이라이트되고 건축물대장 정보를 조회합니다</p>
+        <p>클릭한 필지가 하이라이트되고 건축물대장 정보를 즉시 조회합니다</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -181,7 +151,6 @@ if "addr_info"      not in st.session_state: st.session_state.addr_info      = N
 if "building_title" not in st.session_state: st.session_state.building_title = None
 if "building_basic" not in st.session_state: st.session_state.building_basic = None
 if "last_coord"     not in st.session_state: st.session_state.last_coord     = ""
-if "parcel_geom"    not in st.session_state: st.session_state.parcel_geom    = None
 
 coord_input = st.text_input("coord", value="", key="coord_box", label_visibility="collapsed")
 
@@ -189,13 +158,9 @@ if coord_input and coord_input != st.session_state.last_coord:
     st.session_state.last_coord = coord_input
     try:
         lat, lng = map(float, coord_input.split(","))
-
         addr_doc = get_jibun_address(lat, lng)
         bjd_doc  = get_region_code(lat, lng)
-        geom     = get_parcel_geometry(lng, lat)
-
-        st.session_state.addr_info   = addr_doc
-        st.session_state.parcel_geom = geom
+        st.session_state.addr_info = addr_doc
 
         if bjd_doc:
             b_code  = bjd_doc.get("code", "")
@@ -203,23 +168,13 @@ if coord_input and coord_input != st.session_state.last_coord:
             main_no = jibun.get("main_address_no", "0") or "0"
             sub_no  = jibun.get("sub_address_no",  "0") or "0"
             if len(b_code) >= 10:
-                sc = b_code[:5]
-                bc = b_code[5:10]
+                sc = b_code[:5]; bc = b_code[5:10]
                 st.session_state.building_title = get_building_title(sc, bc, main_no, sub_no)
                 st.session_state.building_basic = get_building_info(sc, bc, main_no, sub_no)
-            else:
-                st.session_state.building_title = None
-                st.session_state.building_basic = None
-        else:
-            st.session_state.building_title = None
-            st.session_state.building_basic = None
-
     except Exception as e:
         st.session_state.addr_info = {"error": str(e)}
 
-import json
-parcel_geom_json = json.dumps(st.session_state.parcel_geom) if st.session_state.parcel_geom else "null"
-
+# ── 지도 HTML (VWorld 필지 조회를 JS에서 직접 처리) ──────────────────────────
 MAP_HTML = f"""
 <!DOCTYPE html>
 <html>
@@ -229,77 +184,112 @@ MAP_HTML = f"""
 <style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
   body {{ font-family: sans-serif; background:#f8fafc; }}
-  #map {{ width:100%; height:500px; border-radius:12px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,.12); }}
+  #map {{ width:100%; height:500px; border-radius:12px; overflow:hidden;
+          box-shadow:0 4px 20px rgba(0,0,0,.12); }}
   #status {{
     position:absolute; top:10px; left:50%; transform:translateX(-50%);
     background:rgba(255,255,255,.95); border-radius:24px;
     padding:8px 20px; font-size:13px; color:#37474f;
     box-shadow:0 2px 12px rgba(0,0,0,.15); z-index:10;
-    backdrop-filter:blur(4px); white-space:nowrap;
+    backdrop-filter:blur(4px); white-space:nowrap; max-width:90%;
+    overflow:hidden; text-overflow:ellipsis;
   }}
   .wrapper {{ position:relative; }}
 </style>
 </head>
 <body>
 <div class="wrapper">
-  <div id="status">🖱️ 지도를 클릭하면 필지 정보를 조회합니다</div>
+  <div id="status">🖱️ 지도를 클릭하면 필지를 조회합니다</div>
   <div id="map"></div>
 </div>
 <script>
-var PARCEL_GEOM = {parcel_geom_json};
+var VWORLD_KEY = '{VWORLD_KEY}';
+var polygon    = null;
+var marker     = null;
 
 (function() {{
   var script = document.createElement('script');
-  script.type = 'text/javascript';
   script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_JS_KEY}&autoload=false';
   script.onload = function() {{
     kakao.maps.load(function() {{
       var container = document.getElementById('map');
-      var options = {{ center: new kakao.maps.LatLng(37.5665, 126.9780), level: 4 }};
-      var map       = new kakao.maps.Map(container, options);
-      var marker    = null;
-      var polygon   = null;
+      var map = new kakao.maps.Map(container, {{
+        center: new kakao.maps.LatLng(37.5665, 126.9780),
+        level: 4
+      }});
 
       map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
       map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
 
-      // 이미 조회된 필지 폴리곤 있으면 즉시 그리기
-      if (PARCEL_GEOM) {{
-        drawPolygon(PARCEL_GEOM);
-      }}
-
+      // ── 필지 폴리곤 그리기 ──
       function drawPolygon(geom) {{
         if (polygon) polygon.setMap(null);
         var coords = [];
 
+        var rings = [];
         if (geom.type === 'Polygon') {{
-          geom.coordinates[0].forEach(function(c) {{
-            coords.push(new kakao.maps.LatLng(c[1], c[0]));
-          }});
+          rings = geom.coordinates[0];
         }} else if (geom.type === 'MultiPolygon') {{
-          geom.coordinates[0][0].forEach(function(c) {{
-            coords.push(new kakao.maps.LatLng(c[1], c[0]));
-          }});
+          rings = geom.coordinates[0][0];
         }}
+
+        rings.forEach(function(c) {{
+          coords.push(new kakao.maps.LatLng(c[1], c[0]));
+        }});
 
         if (coords.length === 0) return;
 
         polygon = new kakao.maps.Polygon({{
           map:           map,
           path:          coords,
-          strokeWeight:  2.5,
+          strokeWeight:  3,
           strokeColor:   '#FF6B35',
           strokeOpacity: 1,
           fillColor:     '#FF6B35',
-          fillOpacity:   0.25,
+          fillOpacity:   0.3,
         }});
 
-        // 필지 중심으로 지도 이동
+        // 필지에 맞게 지도 범위 조정
         var bounds = new kakao.maps.LatLngBounds();
         coords.forEach(function(c) {{ bounds.extend(c); }});
-        map.setBounds(bounds);
+        map.setBounds(bounds, 60);
       }}
 
+      // ── VWorld WFS로 필지 경계 조회 (브라우저에서 직접) ──
+      function fetchParcel(lat, lng) {{
+        var d   = 0.0004;
+        var url = 'https://api.vworld.kr/req/wfs'
+          + '?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature'
+          + '&TYPENAME=lt_c_lhpllnd'
+          + '&SRSNAME=EPSG:4326'
+          + '&BBOX=' + (lng-d) + ',' + (lat-d) + ',' + (lng+d) + ',' + (lat+d) + ',EPSG:4326'
+          + '&OUTPUT=application/json'
+          + '&KEY=' + VWORLD_KEY;
+
+        fetch(url)
+          .then(function(r) {{ return r.json(); }})
+          .then(function(data) {{
+            var features = data.features || [];
+            if (features.length === 0) {{
+              document.getElementById('status').innerHTML = '⚠️ 필지 경계 없음 (도로/하천 등)';
+              return;
+            }}
+
+            // 클릭 좌표를 포함하는 필지 찾기
+            var best = features[0];
+            drawPolygon(best.geometry);
+
+            var props = best.properties || {{}};
+            var pnu   = props.pnu || props.PNU || '';
+            document.getElementById('status').innerHTML =
+              '🟧 필지 하이라이트 완료' + (pnu ? ' · PNU: ' + pnu : '');
+          }})
+          .catch(function(e) {{
+            document.getElementById('status').innerHTML = '⚠️ VWorld 조회 실패: ' + e.message;
+          }});
+      }}
+
+      // ── 클릭 이벤트 ──
       kakao.maps.event.addListener(map, 'click', function(mouseEvent) {{
         var lat = mouseEvent.latLng.getLat();
         var lng = mouseEvent.latLng.getLng();
@@ -308,7 +298,10 @@ var PARCEL_GEOM = {parcel_geom_json};
         marker = new kakao.maps.Marker({{ position: mouseEvent.latLng, map: map }});
         document.getElementById('status').innerHTML = '⏳ 필지 조회 중...';
 
-        // Streamlit에 좌표 전달
+        // 필지 폴리곤 (브라우저에서 직접 VWorld 호출)
+        fetchParcel(lat, lng);
+
+        // Streamlit에 좌표 전달 (건축물대장 조회용)
         var inputs = window.parent.document.querySelectorAll('input[type="text"]');
         for (var i = 0; i < inputs.length; i++) {{
           var inp    = inputs[i];
@@ -321,14 +314,12 @@ var PARCEL_GEOM = {parcel_geom_json};
           inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keyup',    {{ key:'Enter', keyCode:13, bubbles:true }}));
           break;
         }}
-
-        setTimeout(function() {{
-          document.getElementById('status').innerHTML = '📍 위도: ' + lat.toFixed(5) + ' / 경도: ' + lng.toFixed(5);
-        }}, 2000);
       }});
     }});
   }};
-  script.onerror = function() {{ document.getElementById('status').innerHTML = '❌ 카카오맵 로드 실패'; }};
+  script.onerror = function() {{
+    document.getElementById('status').innerHTML = '❌ 카카오맵 로드 실패';
+  }};
   document.head.appendChild(script);
 }})();
 </script>
@@ -345,7 +336,8 @@ with col_info:
         <div class="hint-box">
             <div class="icon">🗺️</div>
             <strong>지도를 클릭해 필지를 선택하세요</strong><br>
-            클릭한 필지가 주황색으로 하이라이트되고<br>건축물대장 정보가 표시됩니다
+            클릭한 필지가 <span style="color:#FF6B35;font-weight:700">주황색</span>으로 하이라이트되고<br>
+            건축물대장 정보가 표시됩니다
         </div>""", unsafe_allow_html=True)
     else:
         addr_doc = st.session_state.addr_info
@@ -363,10 +355,6 @@ with col_info:
                 <span class="data-label">지번 주소</span>
                 <span class="data-value">{jibun.get("address_name","없음")}</span>
             </div>
-            <div class="data-row">
-                <span class="data-label">필지 경계</span>
-                <span class="data-value">{"✅ 표시됨" if st.session_state.parcel_geom else "❌ 데이터 없음"}</span>
-            </div>
         </div>""", unsafe_allow_html=True)
 
         def fmt_area(v):
@@ -375,10 +363,10 @@ with col_info:
 
         def fmt_date(v):
             s = str(v).strip()
-            return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s) == 8 and s.isdigit() else (s if s else "-")
+            return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s)==8 and s.isdigit() else (s if s else "-")
 
         def val(v):
-            return str(v).strip() if v and str(v).strip() not in ["", "0", "None"] else "-"
+            return str(v).strip() if v and str(v).strip() not in ["","0","None"] else "-"
 
         title_data = st.session_state.building_title
         basic_data = st.session_state.building_basic
@@ -411,8 +399,8 @@ with col_info:
                              if regstr != "-" else ""
 
                 rows = [f"<div class='data-row'><span class='data-label'>주용도</span><span class='data-value'><span class='badge {badge_cls}'>{use_nm}</span></span></div>"]
-                if struct   != "-": rows.append(f"<div class='data-row'><span class='data-label'>구조</span><span class='data-value'>{struct}</span></div>")
-                if roof     != "-": rows.append(f"<div class='data-row'><span class='data-label'>지붕</span><span class='data-value'>{roof}</span></div>")
+                if struct    != "-": rows.append(f"<div class='data-row'><span class='data-label'>구조</span><span class='data-value'>{struct}</span></div>")
+                if roof      != "-": rows.append(f"<div class='data-row'><span class='data-label'>지붕</span><span class='data-value'>{roof}</span></div>")
                 rows.append(f"<div class='data-row'><span class='data-label'>층수</span><span class='data-value'>지상 {floor_u}층 / 지하 {floor_d}층</span></div>")
                 if area      != "-": rows.append(f"<div class='data-row'><span class='data-label'>연면적</span><span class='data-value'>{area}</span></div>")
                 if bc_area   != "-": rows.append(f"<div class='data-row'><span class='data-label'>건축면적</span><span class='data-value'>{bc_area}</span></div>")
@@ -435,7 +423,7 @@ with col_info:
                 regstr = val(item.get("regstrGbCdNm"))
                 kind   = val(item.get("regstrKindCdNm"))
                 kind_badge = f'<span class="badge badge-purple" style="font-size:.72rem">{regstr} · {kind}</span>' if regstr != "-" else ""
-                st.markdown(f'<div class="info-card"><h3>🏗️ {name} {kind_badge}</h3><p style="color:#888;font-size:.85rem">표제부 상세정보 없음</p></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="info-card"><h3>🏗️ {name} {kind_badge}</h3><p style="color:#888;font-size:.85rem">상세정보 없음</p></div>', unsafe_allow_html=True)
         else:
             st.markdown('<div class="error-box">ℹ️ 해당 위치에 등록된 건축물대장 정보가 없습니다.</div>', unsafe_allow_html=True)
 
@@ -444,5 +432,4 @@ with col_info:
             st.session_state.building_title = None
             st.session_state.building_basic = None
             st.session_state.last_coord     = ""
-            st.session_state.parcel_geom    = None
             st.rerun()
