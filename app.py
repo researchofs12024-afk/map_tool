@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import json
+import xml.etree.ElementTree as ET
 
 st.set_page_config(
     page_title="건축물대장 조회 서비스",
@@ -39,6 +40,81 @@ def get_jibun_address(lat, lng):
         return docs[0] if docs else {}
     except Exception:
         return {}
+
+
+def get_parcel_polygon(lat, lng):
+    """
+    국토정보플랫폼 WMS GetFeatureInfo 대신
+    NSDI 연속지적도 WFS로 필지 폴리곤 조회
+    """
+    # 방법1: 카카오 지적 API (비공개)
+    # 방법2: NSDI WFS
+    url = "https://www.eum.go.kr/web/ws/map/wfs.do"
+    params = {
+        "service":    "WFS",
+        "version":    "2.0.0",
+        "request":    "GetFeature",
+        "typeName":   "lp_pa_cbnd_bubun",
+        "srsName":    "EPSG:4326",
+        "outputFormat": "application/json",
+        "bbox":       f"{lng-0.0003},{lat-0.0003},{lng+0.0003},{lat+0.0003},EPSG:4326",
+    }
+    try:
+        resp     = requests.get(url, params=params, timeout=8)
+        data     = resp.json()
+        features = data.get("features", [])
+        if features:
+            for f in features:
+                geom = f.get("geometry")
+                if geom and _point_in_geom(lng, lat, geom):
+                    return geom, "OK-eum"
+            return features[0].get("geometry"), "OK-eum(fallback)"
+        return None, f"features없음: {resp.text[:100]}"
+    except Exception as e1:
+        pass
+
+    # 방법3: 토지이음 WFS
+    try:
+        url2 = "https://api.vworld.kr/req/wfs"
+        params2 = {
+            "SERVICE":  "WFS", "VERSION": "2.0.0", "REQUEST": "GetFeature",
+            "TYPENAME": "lt_c_lhpllnd", "SRSNAME": "EPSG:4326",
+            "BBOX":     f"{lng-0.0003},{lat-0.0003},{lng+0.0003},{lat+0.0003},EPSG:4326",
+            "OUTPUT":   "application/json",
+            "KEY":      "F12043F0-86DF-3395-9004-27A377FD5FB6",
+        }
+        resp2    = requests.get(url2, params=params2, timeout=8)
+        data2    = resp2.json()
+        features2 = data2.get("features", [])
+        if features2:
+            for f in features2:
+                geom = f.get("geometry")
+                if geom and _point_in_geom(lng, lat, geom):
+                    return geom, "OK-vworld"
+            return features2[0].get("geometry"), "OK-vworld(fallback)"
+        return None, f"vworld features없음"
+    except Exception as e2:
+        return None, f"모든 방법 실패: {str(e2)[:80]}"
+
+
+def _point_in_geom(px, py, geom):
+    try:
+        rings = [geom["coordinates"][0]] if geom["type"] == "Polygon" \
+                else [g[0] for g in geom["coordinates"]]
+        for ring in rings:
+            inside = False
+            n = len(ring); j = n - 1
+            for i in range(n):
+                xi, yi = ring[i][0], ring[i][1]
+                xj, yj = ring[j][0], ring[j][1]
+                if ((yi > py) != (yj > py)) and (px < (xj-xi)*(py-yi)/(yj-yi+1e-15)+xi):
+                    inside = not inside
+                j = i
+            if inside:
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def get_building_title(sigungu_cd, bjdong_cd, bun, ji):
@@ -116,6 +192,9 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
 .hint-box .icon { font-size:2.4rem; margin-bottom:10px; }
 .error-box { background:#fff3cd; border:1px solid #ffc107; border-radius:10px;
              padding:14px 18px; color:#856404; font-size:.88rem; }
+.debug-box { background:#f0fff4; border:1px solid #9ae6b4; border-radius:8px;
+             padding:10px 14px; color:#276749; font-size:.75rem; font-family:monospace;
+             word-break:break-all; margin-bottom:10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -124,14 +203,15 @@ st.markdown("""
     <div style="font-size:2.4rem">🏢</div>
     <div>
         <h1>건축물대장 조회 서비스</h1>
-        <p>지적편집도 위에서 클릭하면 건축물대장 정보를 즉시 조회합니다</p>
+        <p>클릭한 필지가 붉게 하이라이트되고 건축물대장 정보를 즉시 조회합니다</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 col_map, col_info = st.columns([6, 4], gap="medium")
 
-for k, v in [("addr_info",None),("building_title",None),("building_basic",None),("last_coord","")]:
+for k, v in [("addr_info",None),("building_title",None),("building_basic",None),
+             ("last_coord",""),("parcel_geom",None),("parcel_status","")]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -141,9 +221,14 @@ if coord_input and coord_input != st.session_state.last_coord:
     st.session_state.last_coord = coord_input
     try:
         lat, lng = map(float, coord_input.split(","))
-        addr_doc = get_jibun_address(lat, lng)
-        bjd_doc  = get_region_code(lat, lng)
-        st.session_state.addr_info = addr_doc
+        addr_doc          = get_jibun_address(lat, lng)
+        bjd_doc           = get_region_code(lat, lng)
+        geom, p_status    = get_parcel_polygon(lat, lng)
+
+        st.session_state.addr_info     = addr_doc
+        st.session_state.parcel_geom   = geom
+        st.session_state.parcel_status = p_status
+
         if bjd_doc:
             b_code  = bjd_doc.get("code", "")
             jibun   = addr_doc.get("address", {}) if addr_doc else {}
@@ -154,7 +239,10 @@ if coord_input and coord_input != st.session_state.last_coord:
                 st.session_state.building_title = get_building_title(sc, bc, main_no, sub_no)
                 st.session_state.building_basic = get_building_info(sc, bc, main_no, sub_no)
     except Exception as e:
-        st.session_state.addr_info = {"error": str(e)}
+        st.session_state.addr_info     = {"error": str(e)}
+        st.session_state.parcel_status = f"예외: {e}"
+
+parcel_json = json.dumps(st.session_state.parcel_geom) if st.session_state.parcel_geom else "null"
 
 MAP_HTML = f"""
 <!DOCTYPE html>
@@ -173,106 +261,54 @@ MAP_HTML = f"""
     font-size:13px; color:#37474f; box-shadow:0 2px 12px rgba(0,0,0,.15);
     z-index:10; backdrop-filter:blur(4px); white-space:nowrap;
   }}
-  #map-type-btns {{
-    position:absolute; bottom:14px; left:14px; z-index:10;
-    display:flex; gap:6px;
-  }}
-  .map-btn {{
-    background:rgba(255,255,255,.95); border:none; border-radius:8px;
-    padding:6px 12px; font-size:12px; font-weight:600; cursor:pointer;
-    box-shadow:0 2px 8px rgba(0,0,0,.15); color:#37474f;
-    transition: all .15s;
-  }}
-  .map-btn.active {{ background:#1a2e3b; color:#fff; }}
   .wrapper {{ position:relative; }}
 </style>
 </head>
 <body>
 <div class="wrapper">
-  <div id="status">🖱️ 지도를 클릭하면 건물 정보를 조회합니다</div>
+  <div id="status">🖱️ 지도를 클릭하면 필지를 조회합니다</div>
   <div id="map"></div>
-  <div id="map-type-btns">
-    <button class="map-btn active" onclick="setMapType('normal')">일반</button>
-    <button class="map-btn" onclick="setMapType('cadastral')">지적편집도 🗺</button>
-    <button class="map-btn" onclick="setMapType('hybrid')">스카이뷰</button>
-  </div>
 </div>
 <script>
-var map, marker, circle, overlay;
-var currentMapType = 'normal';
-
-function setMapType(type) {{
-  document.querySelectorAll('.map-btn').forEach(function(b) {{ b.classList.remove('active'); }});
-  event.target.classList.add('active');
-  currentMapType = type;
-
-  if (type === 'normal') {{
-    map.setMapTypeId(kakao.maps.MapTypeId.ROADMAP);
-    map.removeOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);
-  }} else if (type === 'cadastral') {{
-    map.setMapTypeId(kakao.maps.MapTypeId.ROADMAP);
-    map.addOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);  // 지적편집도
-  }} else if (type === 'hybrid') {{
-    map.setMapTypeId(kakao.maps.MapTypeId.HYBRID);
-    map.removeOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);
-  }}
-}}
+var PARCEL_GEOM = {parcel_json};
 
 (function() {{
   var script = document.createElement('script');
   script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_JS_KEY}&autoload=false';
   script.onload = function() {{
     kakao.maps.load(function() {{
-      map = new kakao.maps.Map(document.getElementById('map'), {{
+      var map = new kakao.maps.Map(document.getElementById('map'), {{
         center: new kakao.maps.LatLng(37.5665, 126.9780), level: 3
       }});
-
-      // 기본: 지적편집도 오버레이 ON
-      map.addOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);
-      document.querySelectorAll('.map-btn')[1].classList.add('active');
-      document.querySelectorAll('.map-btn')[0].classList.remove('active');
-
       map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
+      map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
+
+      var polygon = null, marker = null;
+
+      function drawPolygon(geom) {{
+        if (polygon) polygon.setMap(null);
+        if (!geom) return;
+        var rings = geom.type === 'Polygon' ? geom.coordinates[0] : geom.coordinates[0][0];
+        var path  = rings.map(function(c) {{ return new kakao.maps.LatLng(c[1], c[0]); }});
+        var bounds = new kakao.maps.LatLngBounds();
+        path.forEach(function(p) {{ bounds.extend(p); }});
+        polygon = new kakao.maps.Polygon({{
+          map: map, path: path,
+          strokeWeight: 3, strokeColor: '#E53E3E', strokeOpacity: 1,
+          fillColor: '#FC8181', fillOpacity: 0.35,
+        }});
+        map.setBounds(bounds, 80);
+        document.getElementById('status').innerHTML = '🔴 필지 하이라이트 완료';
+      }}
+
+      if (PARCEL_GEOM) drawPolygon(PARCEL_GEOM);
 
       kakao.maps.event.addListener(map, 'click', function(e) {{
         var lat = e.latLng.getLat(), lng = e.latLng.getLng();
-
-        // 기존 마커/원 제거
         if (marker) marker.setMap(null);
-        if (circle) circle.setMap(null);
-        if (overlay) overlay.setMap(null);
-
-        // 마커
         marker = new kakao.maps.Marker({{ position: e.latLng, map: map }});
-
-        // 하이라이트 원 (필지 강조 효과)
-        circle = new kakao.maps.Circle({{
-          map:           map,
-          center:        e.latLng,
-          radius:        18,
-          strokeWeight:  3,
-          strokeColor:   '#FF6B35',
-          strokeOpacity: 1,
-          fillColor:     '#FF6B35',
-          fillOpacity:   0.25,
-        }});
-
-        // 펄스 애니메이션 원
-        var pulseCircle = new kakao.maps.Circle({{
-          map:           map,
-          center:        e.latLng,
-          radius:        35,
-          strokeWeight:  2,
-          strokeColor:   '#FF6B35',
-          strokeOpacity: 0.5,
-          fillColor:     '#FF6B35',
-          fillOpacity:   0.08,
-        }});
-        setTimeout(function() {{ pulseCircle.setMap(null); }}, 1500);
-
         document.getElementById('status').innerHTML = '⏳ 조회 중...';
 
-        // Streamlit에 좌표 전달
         var inputs = window.parent.document.querySelectorAll('input[type="text"]');
         if (inputs.length > 0) {{
           var inp = inputs[0], coord = lat.toFixed(7) + ',' + lng.toFixed(7);
@@ -284,10 +320,6 @@ function setMapType(type) {{
               : new inp.ownerDocument.defaultView.Event(t, {{bubbles:true}}));
           }});
         }}
-
-        setTimeout(function() {{
-          document.getElementById('status').innerHTML = '📍 위도: ' + lat.toFixed(5) + ' / 경도: ' + lng.toFixed(5);
-        }}, 2500);
       }});
     }});
   }};
@@ -306,9 +338,9 @@ with col_info:
         st.markdown("""
         <div class="hint-box">
             <div class="icon">🗺️</div>
-            <strong>지도를 클릭해 건물을 조회하세요</strong><br>
-            하단 <b>지적편집도</b> 버튼으로 필지 경계를 확인하고<br>
-            클릭하면 건축물대장 정보가 표시됩니다
+            <strong>지도를 클릭해 필지를 선택하세요</strong><br>
+            클릭한 필지가 <span style="color:#E53E3E;font-weight:700">붉은색</span>으로 하이라이트되고<br>
+            건축물대장 정보가 표시됩니다
         </div>""", unsafe_allow_html=True)
     else:
         addr_doc = st.session_state.addr_info
@@ -326,7 +358,15 @@ with col_info:
                 <span class="data-label">지번 주소</span>
                 <span class="data-value">{jibun.get("address_name","없음")}</span>
             </div>
+            <div class="data-row">
+                <span class="data-label">필지 상태</span>
+                <span class="data-value">{"🔴 하이라이트됨" if st.session_state.parcel_geom else "⚠️ 경계 없음"}</span>
+            </div>
         </div>""", unsafe_allow_html=True)
+
+        if st.session_state.parcel_status and not st.session_state.parcel_geom:
+            st.markdown(f'<div class="debug-box">필지 디버그: {st.session_state.parcel_status}</div>',
+                        unsafe_allow_html=True)
 
         def fmt_area(v):
             try: return f"{float(v):,.2f} ㎡" if float(v) > 0 else "-"
@@ -385,7 +425,7 @@ with col_info:
             st.markdown('<div class="error-box">ℹ️ 건축물대장 정보가 없습니다.</div>', unsafe_allow_html=True)
 
         if st.button("🔄 초기화", use_container_width=True):
-            for k in ["addr_info","building_title","building_basic"]:
+            for k in ["addr_info","building_title","building_basic","parcel_geom","parcel_status"]:
                 st.session_state[k] = None
             st.session_state.last_coord = ""
             st.rerun()
