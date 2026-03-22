@@ -115,12 +115,45 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# ── 좌표 입력 (숨김 처리된 st.text_input으로 JS → Python 값 전달) ────────────
 col_map, col_info = st.columns([6, 4], gap="medium")
 
-if "clicked_lat"   not in st.session_state: st.session_state.clicked_lat   = None
-if "clicked_lng"   not in st.session_state: st.session_state.clicked_lng   = None
 if "addr_info"     not in st.session_state: st.session_state.addr_info     = None
 if "building_data" not in st.session_state: st.session_state.building_data = None
+if "last_coord"    not in st.session_state: st.session_state.last_coord    = ""
+
+# JS에서 좌표를 넘길 숨겨진 입력창
+coord_input = st.text_input("coord", value="", key="coord_box", label_visibility="collapsed")
+
+# 좌표가 입력되면 API 호출
+if coord_input and coord_input != st.session_state.last_coord:
+    st.session_state.last_coord = coord_input
+    try:
+        lat_str, lng_str = coord_input.split(",")
+        lat = float(lat_str.strip())
+        lng = float(lng_str.strip())
+
+        addr_doc = get_address_from_coords(lat, lng)
+        st.session_state.addr_info = addr_doc
+
+        if addr_doc and "error" not in addr_doc:
+            jibun   = addr_doc.get("address", {})
+            b_code  = jibun.get("b_code", "")
+            main_no = jibun.get("main_address_no", "0")
+            sub_no  = jibun.get("sub_address_no",  "0")
+            sigungu_cd = b_code[:5]   if len(b_code) >= 5  else ""
+            bjdong_cd  = b_code[5:10] if len(b_code) >= 10 else ""
+            if sigungu_cd and bjdong_cd:
+                st.session_state.building_data = get_building_info(
+                    sigungu_cd, bjdong_cd, main_no, sub_no
+                )
+            else:
+                st.session_state.building_data = None
+        else:
+            st.session_state.building_data = None
+    except Exception as e:
+        st.session_state.addr_info     = {"error": str(e)}
+        st.session_state.building_data = None
 
 MAP_HTML = """
 <!DOCTYPE html>
@@ -132,7 +165,7 @@ MAP_HTML = """
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family: sans-serif; background:#f8fafc; }
   #map {
-    width:100%; height:520px; border-radius:12px; overflow:hidden;
+    width:100%; height:500px; border-radius:12px; overflow:hidden;
     box-shadow:0 4px 20px rgba(0,0,0,.12);
   }
   #status {
@@ -178,12 +211,36 @@ MAP_HTML = """
         document.getElementById('status').innerHTML =
           '📍 위도: ' + lat.toFixed(5) + ' / 경도: ' + lng.toFixed(5);
 
-        window.parent.postMessage({ type: 'MAP_CLICK', lat: lat, lng: lng }, '*');
+        // Streamlit의 숨겨진 text_input에 좌표값 입력 후 Enter 이벤트 발생
+        var inputs = window.parent.document.querySelectorAll('input[type="text"]');
+        for (var i = 0; i < inputs.length; i++) {
+          var inp = inputs[i];
+          // aria-label 또는 data-testid로 우리 input 찾기
+          var nativeInput = Object.keys(inp).find(k => k.startsWith('__reactFiber'));
+          var coord = lat.toFixed(7) + ',' + lng.toFixed(7);
+
+          var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            window.parent.HTMLInputElement.prototype, 'value'
+          ).set;
+          nativeInputValueSetter.call(inp, coord);
+
+          inp.dispatchEvent(new inp.ownerDocument.defaultView.Event('input', { bubbles: true }));
+          inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keydown', {
+            key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true
+          }));
+          inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keypress', {
+            key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true
+          }));
+          inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keyup', {
+            key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true
+          }));
+          break;
+        }
       });
     });
   };
   script.onerror = function() {
-    document.getElementById('status').innerHTML = '❌ 카카오맵 로드 실패 - 도메인 등록을 확인하세요';
+    document.getElementById('status').innerHTML = '❌ 카카오맵 로드 실패';
   };
   document.head.appendChild(script);
 })();
@@ -193,35 +250,7 @@ MAP_HTML = """
 """.replace("KAKAO_JS_KEY_PLACEHOLDER", KAKAO_JS_KEY)
 
 with col_map:
-    st.components.v1.html(MAP_HTML, height=540, scrolling=False)
-
-    query_params = st.query_params
-    if "lat" in query_params and "lng" in query_params:
-        try:
-            new_lat = float(query_params["lat"])
-            new_lng = float(query_params["lng"])
-            if (new_lat != st.session_state.clicked_lat or
-                    new_lng != st.session_state.clicked_lng):
-                st.session_state.clicked_lat = new_lat
-                st.session_state.clicked_lng = new_lng
-
-                addr_doc = get_address_from_coords(new_lat, new_lng)
-                st.session_state.addr_info = addr_doc
-
-                if addr_doc and "error" not in addr_doc:
-                    jibun   = addr_doc.get("address", {})
-                    b_code  = jibun.get("b_code", "")
-                    main_no = jibun.get("main_address_no", "0")
-                    sub_no  = jibun.get("sub_address_no",  "0")
-                    sigungu_cd = b_code[:5]   if len(b_code) >= 5  else ""
-                    bjdong_cd  = b_code[5:10] if len(b_code) >= 10 else ""
-                    if sigungu_cd and bjdong_cd:
-                        result = get_building_info(sigungu_cd, bjdong_cd, main_no, sub_no)
-                        st.session_state.building_data = result
-                    else:
-                        st.session_state.building_data = None
-        except Exception:
-            pass
+    st.components.v1.html(MAP_HTML, height=520, scrolling=False)
 
 with col_info:
     if st.session_state.addr_info is None:
@@ -254,12 +283,6 @@ with col_info:
                 <div class="data-row">
                     <span class="data-label">지번 주소</span>
                     <span class="data-value">{jibun_name}</span>
-                </div>
-                <div class="data-row">
-                    <span class="data-label">위도 / 경도</span>
-                    <span class="data-value" style="font-family:monospace;font-size:.82rem">
-                        {st.session_state.clicked_lat:.6f}, {st.session_state.clicked_lng:.6f}
-                    </span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -341,9 +364,7 @@ with col_info:
                 """, unsafe_allow_html=True)
 
         if st.button("🔄 초기화", use_container_width=True):
-            st.session_state.clicked_lat   = None
-            st.session_state.clicked_lng   = None
             st.session_state.addr_info     = None
             st.session_state.building_data = None
-            st.query_params.clear()
+            st.session_state.last_coord    = ""
             st.rerun()
