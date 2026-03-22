@@ -44,7 +44,6 @@ def get_jibun_address(lat, lng):
 
 
 def get_parcel_geometry(lat, lng):
-    """VWorld WFS → 필지 폴리곤 GeoJSON (Python 서버에서 호출 → CORS 우회)"""
     d = 0.0004
     url = "https://api.vworld.kr/req/wfs"
     params = {
@@ -58,23 +57,25 @@ def get_parcel_geometry(lat, lng):
         "KEY":      VWORLD_KEY,
     }
     try:
-        resp     = requests.get(url, params=params, timeout=10)
-        data     = resp.json()
+        resp = requests.get(url, params=params, timeout=8)
+        data = resp.json()
         features = data.get("features", [])
         if not features:
-            return None
-        # 여러 필지 중 클릭 좌표를 포함하는 것 선택
+            return None, f"features 없음 (status={resp.status_code})"
         for f in features:
             geom = f.get("geometry")
             if geom and point_in_geometry(lng, lat, geom):
-                return geom
-        return features[0].get("geometry")  # fallback: 첫번째
-    except Exception:
-        return None
+                return geom, "OK"
+        return features[0].get("geometry"), "OK(fallback)"
+    except requests.exceptions.Timeout:
+        return None, "VWorld 타임아웃"
+    except requests.exceptions.ConnectionError as e:
+        return None, f"연결 오류: {str(e)[:80]}"
+    except Exception as e:
+        return None, f"오류: {str(e)[:80]}"
 
 
 def point_in_geometry(px, py, geom):
-    """간단한 point-in-polygon (ray casting)"""
     try:
         rings = []
         if geom["type"] == "Polygon":
@@ -83,12 +84,11 @@ def point_in_geometry(px, py, geom):
             rings = [g[0] for g in geom["coordinates"]]
         for ring in rings:
             inside = False
-            n = len(ring)
-            j = n - 1
+            n = len(ring); j = n - 1
             for i in range(n):
                 xi, yi = ring[i][0], ring[i][1]
                 xj, yj = ring[j][0], ring[j][1]
-                if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi + 1e-15) + xi):
+                if ((yi > py) != (yj > py)) and (px < (xj-xi)*(py-yi)/(yj-yi+1e-15)+xi):
                     inside = not inside
                 j = i
             if inside:
@@ -102,13 +102,9 @@ def get_building_title(sigungu_cd, bjdong_cd, bun, ji):
     url = "http://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo"
     params = {
         "serviceKey": BUILDING_API_KEY,
-        "sigunguCd":  sigungu_cd,
-        "bjdongCd":   bjdong_cd,
-        "bun":        str(bun).zfill(4),
-        "ji":         str(ji).zfill(4),
-        "numOfRows":  "10",
-        "pageNo":     "1",
-        "_type":      "json",
+        "sigunguCd":  sigungu_cd, "bjdongCd": bjdong_cd,
+        "bun": str(bun).zfill(4), "ji": str(ji).zfill(4),
+        "numOfRows": "10", "pageNo": "1", "_type": "json",
     }
     try:
         body  = requests.get(url, params=params, timeout=10).json().get("response", {}).get("body", {})
@@ -124,13 +120,9 @@ def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
     url = "http://apis.data.go.kr/1613000/BldRgstHubService/getBrBasisOulnInfo"
     params = {
         "serviceKey": BUILDING_API_KEY,
-        "sigunguCd":  sigungu_cd,
-        "bjdongCd":   bjdong_cd,
-        "bun":        str(bun).zfill(4),
-        "ji":         str(ji).zfill(4),
-        "numOfRows":  "10",
-        "pageNo":     "1",
-        "_type":      "json",
+        "sigunguCd":  sigungu_cd, "bjdongCd": bjdong_cd,
+        "bun": str(bun).zfill(4), "ji": str(ji).zfill(4),
+        "numOfRows": "10", "pageNo": "1", "_type": "json",
     }
     try:
         body  = requests.get(url, params=params, timeout=10).json().get("response", {}).get("body", {})
@@ -142,7 +134,6 @@ def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
         return []
 
 
-# ── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
@@ -178,13 +169,17 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
 .badge-purple { background:#ede7f6; color:#4527a0; }
 .hint-box {
     background:linear-gradient(135deg,#e3f2fd,#f3e5f5); border-radius:12px;
-    padding:30px 22px; text-align:center; color:#37474f;
-    font-size:.9rem; line-height:1.9;
+    padding:30px 22px; text-align:center; color:#37474f; font-size:.9rem; line-height:1.9;
 }
 .hint-box .icon { font-size:2.4rem; margin-bottom:10px; }
 .error-box {
     background:#fff3cd; border:1px solid #ffc107; border-radius:10px;
     padding:14px 18px; color:#856404; font-size:.88rem;
+}
+.debug-box {
+    background:#fff8e1; border:1px solid #ffe082; border-radius:10px;
+    padding:12px 16px; color:#5d4037; font-size:.78rem;
+    font-family:monospace; word-break:break-all; margin-bottom:12px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -201,11 +196,10 @@ st.markdown("""
 
 col_map, col_info = st.columns([6, 4], gap="medium")
 
-if "addr_info"      not in st.session_state: st.session_state.addr_info      = None
-if "building_title" not in st.session_state: st.session_state.building_title = None
-if "building_basic" not in st.session_state: st.session_state.building_basic = None
-if "last_coord"     not in st.session_state: st.session_state.last_coord     = ""
-if "parcel_geom"    not in st.session_state: st.session_state.parcel_geom    = None
+for k, default in [("addr_info",None),("building_title",None),("building_basic",None),
+                    ("last_coord",""),("parcel_geom",None),("vworld_status","")]:
+    if k not in st.session_state:
+        st.session_state[k] = default
 
 coord_input = st.text_input("coord", value="", key="coord_box", label_visibility="collapsed")
 
@@ -215,10 +209,11 @@ if coord_input and coord_input != st.session_state.last_coord:
         lat, lng = map(float, coord_input.split(","))
         addr_doc = get_jibun_address(lat, lng)
         bjd_doc  = get_region_code(lat, lng)
-        geom     = get_parcel_geometry(lat, lng)   # Python 서버에서 VWorld 호출
+        geom, vworld_status = get_parcel_geometry(lat, lng)
 
-        st.session_state.addr_info   = addr_doc
-        st.session_state.parcel_geom = geom
+        st.session_state.addr_info      = addr_doc
+        st.session_state.parcel_geom    = geom
+        st.session_state.vworld_status  = vworld_status
 
         if bjd_doc:
             b_code  = bjd_doc.get("code", "")
@@ -230,9 +225,9 @@ if coord_input and coord_input != st.session_state.last_coord:
                 st.session_state.building_title = get_building_title(sc, bc, main_no, sub_no)
                 st.session_state.building_basic = get_building_info(sc, bc, main_no, sub_no)
     except Exception as e:
-        st.session_state.addr_info = {"error": str(e)}
+        st.session_state.addr_info     = {"error": str(e)}
+        st.session_state.vworld_status = f"예외: {str(e)}"
 
-# 필지 GeoJSON을 JS에 넘김
 parcel_json = json.dumps(st.session_state.parcel_geom) if st.session_state.parcel_geom else "null"
 
 MAP_HTML = f"""
@@ -262,7 +257,6 @@ MAP_HTML = f"""
   <div id="map"></div>
 </div>
 <script>
-// Python이 미리 조회한 필지 GeoJSON
 var PARCEL_GEOM = {parcel_json};
 
 (function() {{
@@ -276,19 +270,15 @@ var PARCEL_GEOM = {parcel_json};
       map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
       map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
 
-      var polygon = null;
-      var marker  = null;
+      var polygon = null, marker = null;
 
       function drawPolygon(geom) {{
         if (polygon) polygon.setMap(null);
         if (!geom) return;
-        var rings = geom.type === 'Polygon'
-          ? geom.coordinates[0]
-          : geom.coordinates[0][0];
-        var path   = rings.map(function(c) {{ return new kakao.maps.LatLng(c[1], c[0]); }});
+        var rings = geom.type === 'Polygon' ? geom.coordinates[0] : geom.coordinates[0][0];
+        var path  = rings.map(function(c) {{ return new kakao.maps.LatLng(c[1], c[0]); }});
         var bounds = new kakao.maps.LatLngBounds();
         path.forEach(function(p) {{ bounds.extend(p); }});
-
         polygon = new kakao.maps.Polygon({{
           map: map, path: path,
           strokeWeight: 3, strokeColor: '#FF6B35', strokeOpacity: 1,
@@ -298,7 +288,6 @@ var PARCEL_GEOM = {parcel_json};
         document.getElementById('status').innerHTML = '🟧 필지 하이라이트 완료';
       }}
 
-      // 이미 조회된 필지 있으면 즉시 표시
       if (PARCEL_GEOM) drawPolygon(PARCEL_GEOM);
 
       kakao.maps.event.addListener(map, 'click', function(e) {{
@@ -307,7 +296,6 @@ var PARCEL_GEOM = {parcel_json};
         marker = new kakao.maps.Marker({{ position: e.latLng, map: map }});
         document.getElementById('status').innerHTML = '⏳ 조회 중...';
 
-        // Streamlit에 좌표 전달 → Python이 VWorld+건축물대장 모두 처리
         var inputs = window.parent.document.querySelectorAll('input[type="text"]');
         if (inputs.length > 0) {{
           var inp    = inputs[0];
@@ -315,10 +303,9 @@ var PARCEL_GEOM = {parcel_json};
           var setter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
           setter.call(inp, coord);
           ['input','keydown','keypress','keyup'].forEach(function(t) {{
-            var ev = t.startsWith('key')
+            inp.dispatchEvent(t.startsWith('key')
               ? new inp.ownerDocument.defaultView.KeyboardEvent(t, {{ key:'Enter', keyCode:13, bubbles:true }})
-              : new inp.ownerDocument.defaultView.Event(t, {{ bubbles:true }});
-            inp.dispatchEvent(ev);
+              : new inp.ownerDocument.defaultView.Event(t, {{ bubbles:true }}));
           }});
         }}
       }});
@@ -361,6 +348,11 @@ with col_info:
             </div>
         </div>""", unsafe_allow_html=True)
 
+        # VWorld 상태 디버그 표시
+        if st.session_state.vworld_status:
+            st.markdown(f'<div class="debug-box">🔍 VWorld 상태: {st.session_state.vworld_status}</div>',
+                        unsafe_allow_html=True)
+
         def fmt_area(v):
             try: return f"{float(v):,.2f} ㎡" if float(v) > 0 else "-"
             except: return "-"
@@ -372,7 +364,6 @@ with col_info:
             return s if s not in ["","0","None"] else "-"
 
         title_data = st.session_state.building_title
-        basic_data = st.session_state.building_basic
 
         if title_data and isinstance(title_data, list):
             for i, item in enumerate(title_data[:3]):
@@ -406,8 +397,11 @@ with col_info:
                 rows.append(f"<div class='data-row'><span class='data-label'>층수</span><span class='data-value'>지상 {floor_u}층 / 지하 {floor_d}층</span></div>")
                 for label, v in [("연면적",area),("건축면적",bc_area),("대지면적",plat_area)]:
                     if v != "-": rows.append(f"<div class='data-row'><span class='data-label'>{label}</span><span class='data-value'>{v}</span></div>")
-                for label, v in [("높이",height+" m" if height!="-" else "-"),("사용승인일",approve),("세대수",fam_cnt+"세대" if fam_cnt!="-" else "-"),("호수",ho_cnt+"호" if ho_cnt!="-" else "-"),("옥내주차",prkg+"대" if prkg!="-" else "-")]:
-                    if v != "-": rows.append(f"<div class='data-row'><span class='data-label'>{label}</span><span class='data-value'>{v}</span></div>")
+                if height  != "-": rows.append(f"<div class='data-row'><span class='data-label'>높이</span><span class='data-value'>{height} m</span></div>")
+                if approve != "-": rows.append(f"<div class='data-row'><span class='data-label'>사용승인일</span><span class='data-value'>{approve}</span></div>")
+                if fam_cnt != "-": rows.append(f"<div class='data-row'><span class='data-label'>세대수</span><span class='data-value'>{fam_cnt}세대</span></div>")
+                if ho_cnt  != "-": rows.append(f"<div class='data-row'><span class='data-label'>호수</span><span class='data-value'>{ho_cnt}호</span></div>")
+                if prkg    != "-": rows.append(f"<div class='data-row'><span class='data-label'>옥내주차</span><span class='data-value'>{prkg}대</span></div>")
 
                 st.markdown(f"""
                 <div class="info-card">
@@ -418,6 +412,7 @@ with col_info:
             st.markdown('<div class="error-box">ℹ️ 해당 위치에 등록된 건축물대장 정보가 없습니다.</div>', unsafe_allow_html=True)
 
         if st.button("🔄 초기화", use_container_width=True):
-            for k in ["addr_info","building_title","building_basic","last_coord","parcel_geom"]:
-                st.session_state[k] = None if k != "last_coord" else ""
+            for k in ["addr_info","building_title","building_basic","parcel_geom","vworld_status"]:
+                st.session_state[k] = None
+            st.session_state.last_coord = ""
             st.rerun()
