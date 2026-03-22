@@ -18,6 +18,38 @@ except Exception:
     BUILDING_API_KEY = "9619e124e16b9e57bad6cfefdc82f6c87749176260b4caff32eda964aad5de1b"
 
 
+def get_address_from_coords(lat, lng):
+    """카카오 좌표 → 주소 (지번 + 법정동코드 포함 버전)"""
+    # coord2regioncode API 사용 → b_code 포함된 응답 반환
+    url = "https://dapi.kakao.com/v2/local/geo/coord2regioncode.json"
+    headers = {"Authorization": f"KakaoAK {KAKAO_REST_KEY}"}
+    params  = {"x": lng, "y": lat}
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        resp.raise_for_status()
+        docs = resp.json().get("documents", [])
+        # region_type == 'B' 가 법정동 (b_code 포함)
+        bjd = next((d for d in docs if d.get("region_type") == "B"), None)
+        adm = next((d for d in docs if d.get("region_type") == "H"), None)
+        return bjd, adm, docs
+    except Exception as e:
+        return None, None, {"error": str(e)}
+
+
+def get_jibun_address(lat, lng):
+    """좌표 → 지번주소 (도로명도 함께)"""
+    url = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
+    headers = {"Authorization": f"KakaoAK {KAKAO_REST_KEY}"}
+    params  = {"x": lng, "y": lat}
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        resp.raise_for_status()
+        docs = resp.json().get("documents", [])
+        return docs[0] if docs else {}
+    except Exception:
+        return {}
+
+
 def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
     url = "http://apis.data.go.kr/1613000/BldRgstHubService/getBrBasisOulnInfo"
     params = {
@@ -32,7 +64,7 @@ def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
     }
     try:
         resp = requests.get(url, params=params, timeout=10)
-        raw = resp.text
+        raw  = resp.text
         try:
             data = resp.json()
         except Exception:
@@ -50,19 +82,7 @@ def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
         return {"error": str(e)}
 
 
-def get_address_from_coords(lat, lng):
-    url = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
-    headers = {"Authorization": f"KakaoAK {KAKAO_REST_KEY}"}
-    params  = {"x": lng, "y": lat}
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
-        resp.raise_for_status()
-        docs = resp.json().get("documents", [])
-        return docs[0] if docs else None
-    except Exception as e:
-        return {"error": str(e)}
-
-
+# ── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
@@ -100,6 +120,7 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
     padding:18px 22px; text-align:center; color:#37474f;
     font-size:.9rem; line-height:1.7;
 }
+.hint-box .icon { font-size:2rem; margin-bottom:8px; }
 .error-box {
     background:#fff3cd; border:1px solid #ffc107; border-radius:10px;
     padding:14px 18px; color:#856404; font-size:.88rem;
@@ -138,35 +159,31 @@ if coord_input and coord_input != st.session_state.last_coord:
         lat = float(lat_str.strip())
         lng = float(lng_str.strip())
 
-        addr_doc = get_address_from_coords(lat, lng)
+        # 1) 지번+도로명 주소
+        addr_doc = get_jibun_address(lat, lng)
         st.session_state.addr_info = addr_doc
 
-        debug = {"lat": lat, "lng": lng}
+        # 2) 법정동 코드 포함 regioncode API
+        bjd_doc, adm_doc, all_docs = get_address_from_coords(lat, lng)
 
-        if addr_doc and "error" not in addr_doc:
-            # ── 전체 address 객체 덤프해서 실제 필드 확인 ──
-            jibun = addr_doc.get("address", {})
-            debug["address_전체"] = str(jibun)  # 전체 필드 출력
+        debug = {
+            "lat": lat, "lng": lng,
+            "bjd_doc": str(bjd_doc)[:300] if bjd_doc else "None",
+        }
 
-            # 카카오 API 실제 필드명: b_code → 없을 수 있음, 대신 다른 필드 시도
-            b_code  = (jibun.get("b_code") or
-                       jibun.get("bcode") or
-                       jibun.get("code") or "")
-            main_no = (jibun.get("main_address_no") or
-                       jibun.get("mainAddressNo") or
-                       jibun.get("mountain_yn") or "0")  # 실제값 확인용
-            sub_no  = (jibun.get("sub_address_no") or
-                       jibun.get("subAddressNo") or "0")
+        if bjd_doc:
+            b_code  = bjd_doc.get("code", "")   # coord2regioncode에서는 'code' 필드
+            debug["b_code"] = b_code
 
-            # address_name에서 직접 파싱 시도 (예: "서울 중구 소공동 1")
-            addr_name = jibun.get("address_name", "")
-            debug["address_name"] = addr_name
-            debug["b_code_raw"]   = b_code
-            debug["main_no_raw"]  = main_no
-            debug["sub_no_raw"]   = sub_no
+            # 지번 주소에서 번지 파싱
+            jibun   = addr_doc.get("address", {}) if addr_doc else {}
+            main_no = jibun.get("main_address_no", "0") or "0"
+            sub_no  = jibun.get("sub_address_no",  "0") or "0"
 
-            # b_code가 있으면 코드 분리
-            if b_code and len(b_code) >= 10:
+            debug["main_no"] = main_no
+            debug["sub_no"]  = sub_no
+
+            if len(b_code) >= 10:
                 sigungu_cd = b_code[:5]
                 bjdong_cd  = b_code[5:10]
                 debug["sigungu_cd"] = sigungu_cd
@@ -177,17 +194,18 @@ if coord_input and coord_input != st.session_state.last_coord:
                 debug["api_result"] = str(result)[:400]
             else:
                 st.session_state.building_data = None
-                debug["error"] = f"b_code 없음 또는 짧음: '{b_code}'"
+                debug["error"] = f"b_code 길이 부족: '{b_code}'"
         else:
             st.session_state.building_data = None
-            debug["addr_error"] = str(addr_doc)
+            debug["error"] = "bjd_doc 없음"
 
         st.session_state.debug_info = debug
 
     except Exception as e:
+        import traceback
         st.session_state.addr_info     = {"error": str(e)}
         st.session_state.building_data = None
-        st.session_state.debug_info    = {"exception": str(e)}
+        st.session_state.debug_info    = {"exception": traceback.format_exc()}
 
 MAP_HTML = """
 <!DOCTYPE html>
@@ -261,25 +279,26 @@ with col_map:
 
 with col_info:
     if st.session_state.addr_info is None:
-        st.markdown("""<div class="hint-box"><div style="font-size:2rem">🗺️</div>
-        <strong>지도를 클릭해 건물 정보를 조회하세요</strong></div>""", unsafe_allow_html=True)
+        st.markdown("""<div class="hint-box"><div class="icon">🗺️</div>
+        <strong>지도를 클릭해 건물 정보를 조회하세요</strong><br>
+        건물 위치를 클릭하면 건축물대장 정보가 표시됩니다</div>""", unsafe_allow_html=True)
     else:
         addr_doc = st.session_state.addr_info
-        if "error" not in addr_doc:
-            road  = addr_doc.get("road_address")
-            jibun = addr_doc.get("address", {})
-            st.markdown(f"""
-            <div class="info-card">
-                <h3>📍 위치 정보</h3>
-                <div class="data-row">
-                    <span class="data-label">도로명 주소</span>
-                    <span class="data-value">{road.get("address_name","없음") if road else "없음"}</span>
-                </div>
-                <div class="data-row">
-                    <span class="data-label">지번 주소</span>
-                    <span class="data-value">{jibun.get("address_name","없음")}</span>
-                </div>
-            </div>""", unsafe_allow_html=True)
+        road  = addr_doc.get("road_address") if addr_doc else None
+        jibun = addr_doc.get("address", {})  if addr_doc else {}
+
+        st.markdown(f"""
+        <div class="info-card">
+            <h3>📍 위치 정보</h3>
+            <div class="data-row">
+                <span class="data-label">도로명 주소</span>
+                <span class="data-value">{road.get("address_name","없음") if road else "없음"}</span>
+            </div>
+            <div class="data-row">
+                <span class="data-label">지번 주소</span>
+                <span class="data-value">{jibun.get("address_name","없음")}</span>
+            </div>
+        </div>""", unsafe_allow_html=True)
 
         # 디버그 박스
         if st.session_state.debug_info:
@@ -289,11 +308,11 @@ with col_info:
 
         bdata = st.session_state.building_data
         if bdata is None:
-            st.markdown('<div class="error-box">⚠️ b_code를 가져오지 못했습니다. 디버그 정보를 확인하세요.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="error-box">⚠️ 법정동 코드를 가져오지 못했습니다.</div>', unsafe_allow_html=True)
         elif isinstance(bdata, dict) and "error" in bdata:
             st.markdown(f'<div class="error-box">⚠️ API 오류: {bdata.get("error","")}</div>', unsafe_allow_html=True)
         elif isinstance(bdata, dict) and bdata.get("empty"):
-            st.markdown(f'<div class="error-box">ℹ️ 건축물대장 없음<br>{bdata.get("raw","")[:200]}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="error-box">ℹ️ 건축물대장 없음<br><small>{bdata.get("raw","")[:200]}</small></div>', unsafe_allow_html=True)
         elif not bdata:
             st.markdown('<div class="error-box">ℹ️ 건축물대장 정보가 없습니다.</div>', unsafe_allow_html=True)
         else:
@@ -308,17 +327,20 @@ with col_info:
                 height    = item.get("heit", "-")
                 approve   = item.get("useAprDay", "-")
                 fam_cnt   = item.get("hhldCnt", "-")
+
                 def fmt_area(v):
                     try: return f"{float(v):,.2f} ㎡"
                     except: return str(v)
                 def fmt_date(v):
                     s = str(v)
                     return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s)==8 else s
+
                 badge_cls = "badge-green" if "주거" in use_nm else \
                             "badge-orange" if any(k in use_nm for k in ["상업","근린"]) else "badge-blue"
                 fam_row = (f"<div class='data-row'><span class='data-label'>세대수</span>"
                            f"<span class='data-value'>{fam_cnt}세대</span></div>"
                            if fam_cnt and fam_cnt != "-" else "")
+
                 st.markdown(f"""
                 <div class="info-card">
                     <h3>🏗️ {name}</h3>
