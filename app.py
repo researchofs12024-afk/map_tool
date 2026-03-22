@@ -154,7 +154,7 @@ MAP_HTML = """
 (function() {
   var script = document.createElement('script');
   script.type = 'text/javascript';
-  script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey=KAKAO_JS_KEY_PLACEHOLDER&libraries=services&autoload=false';
+  script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey=KAKAO_JS_KEY_PLACEHOLDER&autoload=false';
   script.onload = function() {
     kakao.maps.load(function() {
       var container = document.getElementById('map');
@@ -162,9 +162,8 @@ MAP_HTML = """
         center: new kakao.maps.LatLng(37.5665, 126.9780),
         level: 4
       };
-      var map      = new kakao.maps.Map(container, options);
-      var geocoder = new kakao.maps.services.Geocoder();
-      var marker   = null;
+      var map    = new kakao.maps.Map(container, options);
+      var marker = null;
 
       map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
       map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
@@ -175,27 +174,16 @@ MAP_HTML = """
 
         if (marker) marker.setMap(null);
         marker = new kakao.maps.Marker({ position: mouseEvent.latLng, map: map });
-        document.getElementById('status').innerHTML = '⏳ 조회 중...';
+
+        document.getElementById('status').innerHTML =
+          '📍 위도: ' + lat.toFixed(5) + ' / 경도: ' + lng.toFixed(5);
 
         window.parent.postMessage({ type: 'MAP_CLICK', lat: lat, lng: lng }, '*');
-
-        geocoder.coord2Address(lng, lat, function(result, status) {
-          if (status === kakao.maps.services.Status.OK) {
-            var addr = result[0].road_address
-              ? result[0].road_address.address_name
-              : result[0].address.address_name;
-            document.getElementById('status').innerHTML = '📍 ' + addr;
-          } else {
-            document.getElementById('status').innerHTML = '⚠️ 주소를 찾을 수 없습니다';
-          }
-        });
       });
     });
   };
   script.onerror = function() {
     document.getElementById('status').innerHTML = '❌ 카카오맵 로드 실패 - 도메인 등록을 확인하세요';
-    document.getElementById('map').style.background = '#fee';
-    document.getElementById('map').innerHTML = '<p style="padding:20px;color:#c00">카카오 개발자 콘솔에서 이 페이지 도메인을 등록해주세요.</p>';
   };
   document.head.appendChild(script);
 })();
