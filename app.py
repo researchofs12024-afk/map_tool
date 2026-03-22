@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import json
-import xml.etree.ElementTree as ET
 
 st.set_page_config(
     page_title="건축물대장 조회 서비스",
@@ -14,10 +13,12 @@ try:
     KAKAO_JS_KEY     = st.secrets["KAKAO_JS_KEY"]
     KAKAO_REST_KEY   = st.secrets["KAKAO_REST_KEY"]
     BUILDING_API_KEY = st.secrets["BUILDING_API_KEY"]
+    VWORLD_KEY       = st.secrets["VWORLD_KEY"]
 except Exception:
     KAKAO_JS_KEY     = "057a4a253017791fe6072d7b089a063a"
     KAKAO_REST_KEY   = "c5af33c0d1d6a654362d3fea152cc076"
     BUILDING_API_KEY = "9619e124e16b9e57bad6cfefdc82f6c87749176260b4caff32eda964aad5de1b"
+    VWORLD_KEY       = "F12043F0-86DF-3395-9004-27A377FD5FB6"
 
 
 def get_region_code(lat, lng):
@@ -43,58 +44,34 @@ def get_jibun_address(lat, lng):
 
 
 def get_parcel_polygon(lat, lng):
-    """
-    국토정보플랫폼 WMS GetFeatureInfo 대신
-    NSDI 연속지적도 WFS로 필지 폴리곤 조회
-    """
-    # 방법1: 카카오 지적 API (비공개)
-    # 방법2: NSDI WFS
-    url = "https://www.eum.go.kr/web/ws/map/wfs.do"
+    d = 0.0005
+    url = "https://api.vworld.kr/req/wfs"
     params = {
-        "service":    "WFS",
-        "version":    "2.0.0",
-        "request":    "GetFeature",
-        "typeName":   "lp_pa_cbnd_bubun",
-        "srsName":    "EPSG:4326",
-        "outputFormat": "application/json",
-        "bbox":       f"{lng-0.0003},{lat-0.0003},{lng+0.0003},{lat+0.0003},EPSG:4326",
+        "SERVICE":  "WFS",
+        "VERSION":  "2.0.0",
+        "REQUEST":  "GetFeature",
+        "TYPENAME": "lt_c_lhpllnd",
+        "SRSNAME":  "EPSG:4326",
+        "BBOX":     f"{lng-d},{lat-d},{lng+d},{lat+d},EPSG:4326",
+        "OUTPUT":   "application/json",
+        "KEY":      VWORLD_KEY,
     }
     try:
-        resp     = requests.get(url, params=params, timeout=8)
+        resp     = requests.get(url, params=params, timeout=10)
+        raw      = resp.text.strip()
+        if not raw or raw.startswith("<"):
+            return None, f"비정상응답(HTTP {resp.status_code}): {raw[:100]}"
         data     = resp.json()
         features = data.get("features", [])
-        if features:
-            for f in features:
-                geom = f.get("geometry")
-                if geom and _point_in_geom(lng, lat, geom):
-                    return geom, "OK-eum"
-            return features[0].get("geometry"), "OK-eum(fallback)"
-        return None, f"features없음: {resp.text[:100]}"
-    except Exception as e1:
-        pass
-
-    # 방법3: 토지이음 WFS
-    try:
-        url2 = "https://api.vworld.kr/req/wfs"
-        params2 = {
-            "SERVICE":  "WFS", "VERSION": "2.0.0", "REQUEST": "GetFeature",
-            "TYPENAME": "lt_c_lhpllnd", "SRSNAME": "EPSG:4326",
-            "BBOX":     f"{lng-0.0003},{lat-0.0003},{lng+0.0003},{lat+0.0003},EPSG:4326",
-            "OUTPUT":   "application/json",
-            "KEY":      "F12043F0-86DF-3395-9004-27A377FD5FB6",
-        }
-        resp2    = requests.get(url2, params=params2, timeout=8)
-        data2    = resp2.json()
-        features2 = data2.get("features", [])
-        if features2:
-            for f in features2:
-                geom = f.get("geometry")
-                if geom and _point_in_geom(lng, lat, geom):
-                    return geom, "OK-vworld"
-            return features2[0].get("geometry"), "OK-vworld(fallback)"
-        return None, f"vworld features없음"
-    except Exception as e2:
-        return None, f"모든 방법 실패: {str(e2)[:80]}"
+        if not features:
+            return None, "features 없음"
+        for f in features:
+            geom = f.get("geometry")
+            if geom and _point_in_geom(lng, lat, geom):
+                return geom, "OK"
+        return features[0].get("geometry"), "OK(fallback)"
+    except Exception as e:
+        return None, f"오류: {str(e)[:100]}"
 
 
 def _point_in_geom(px, py, geom):
@@ -193,8 +170,8 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
 .error-box { background:#fff3cd; border:1px solid #ffc107; border-radius:10px;
              padding:14px 18px; color:#856404; font-size:.88rem; }
 .debug-box { background:#f0fff4; border:1px solid #9ae6b4; border-radius:8px;
-             padding:10px 14px; color:#276749; font-size:.75rem; font-family:monospace;
-             word-break:break-all; margin-bottom:10px; }
+             padding:10px 14px; color:#276749; font-size:.75rem;
+             font-family:monospace; word-break:break-all; margin-bottom:10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -220,7 +197,7 @@ coord_input = st.text_input("coord", value="", key="coord_box", label_visibility
 if coord_input and coord_input != st.session_state.last_coord:
     st.session_state.last_coord = coord_input
     try:
-        lat, lng = map(float, coord_input.split(","))
+        lat, lng          = map(float, coord_input.split(","))
         addr_doc          = get_jibun_address(lat, lng)
         bjd_doc           = get_region_code(lat, lng)
         geom, p_status    = get_parcel_polygon(lat, lng)
@@ -308,7 +285,6 @@ var PARCEL_GEOM = {parcel_json};
         if (marker) marker.setMap(null);
         marker = new kakao.maps.Marker({{ position: e.latLng, map: map }});
         document.getElementById('status').innerHTML = '⏳ 조회 중...';
-
         var inputs = window.parent.document.querySelectorAll('input[type="text"]');
         if (inputs.length > 0) {{
           var inp = inputs[0], coord = lat.toFixed(7) + ',' + lng.toFixed(7);
@@ -359,7 +335,7 @@ with col_info:
                 <span class="data-value">{jibun.get("address_name","없음")}</span>
             </div>
             <div class="data-row">
-                <span class="data-label">필지 상태</span>
+                <span class="data-label">필지 경계</span>
                 <span class="data-value">{"🔴 하이라이트됨" if st.session_state.parcel_geom else "⚠️ 경계 없음"}</span>
             </div>
         </div>""", unsafe_allow_html=True)
