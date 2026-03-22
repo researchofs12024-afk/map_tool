@@ -21,13 +21,10 @@ except Exception:
 def get_region_code(lat, lng):
     url = "https://dapi.kakao.com/v2/local/geo/coord2regioncode.json"
     headers = {"Authorization": f"KakaoAK {KAKAO_REST_KEY}"}
-    params  = {"x": lng, "y": lat}
     try:
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
-        resp.raise_for_status()
+        resp = requests.get(url, headers=headers, params={"x": lng, "y": lat}, timeout=10)
         docs = resp.json().get("documents", [])
-        bjd = next((d for d in docs if d.get("region_type") == "B"), None)
-        return bjd
+        return next((d for d in docs if d.get("region_type") == "B"), None)
     except Exception:
         return None
 
@@ -35,10 +32,8 @@ def get_region_code(lat, lng):
 def get_jibun_address(lat, lng):
     url = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
     headers = {"Authorization": f"KakaoAK {KAKAO_REST_KEY}"}
-    params  = {"x": lng, "y": lat}
     try:
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
-        resp.raise_for_status()
+        resp = requests.get(url, headers=headers, params={"x": lng, "y": lat}, timeout=10)
         docs = resp.json().get("documents", [])
         return docs[0] if docs else {}
     except Exception:
@@ -46,6 +41,7 @@ def get_jibun_address(lat, lng):
 
 
 def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
+    """건축물대장 기본개요 조회"""
     url = "http://apis.data.go.kr/1613000/BldRgstHubService/getBrBasisOulnInfo"
     params = {
         "serviceKey": BUILDING_API_KEY,
@@ -58,19 +54,42 @@ def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
         "_type":      "json",
     }
     try:
-        resp = requests.get(url, params=params, timeout=10)
+        resp  = requests.get(url, params=params, timeout=10)
         data  = resp.json()
         body  = data.get("response", {}).get("body", {})
-        total = body.get("totalCount", 0)
         items = body.get("items", {})
-        if total == 0 or not items:
+        if not items:
             return []
         item_list = items.get("item", [])
-        if isinstance(item_list, dict):
-            item_list = [item_list]
-        return item_list
+        return [item_list] if isinstance(item_list, dict) else item_list
     except Exception as e:
         return {"error": str(e)}
+
+
+def get_building_title(sigungu_cd, bjdong_cd, bun, ji):
+    """건축물대장 표제부 조회 (상세 면적/구조/층수 포함)"""
+    url = "http://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo"
+    params = {
+        "serviceKey": BUILDING_API_KEY,
+        "sigunguCd":  sigungu_cd,
+        "bjdongCd":   bjdong_cd,
+        "bun":        str(bun).zfill(4),
+        "ji":         str(ji).zfill(4),
+        "numOfRows":  "10",
+        "pageNo":     "1",
+        "_type":      "json",
+    }
+    try:
+        resp  = requests.get(url, params=params, timeout=10)
+        data  = resp.json()
+        body  = data.get("response", {}).get("body", {})
+        items = body.get("items", {})
+        if not items:
+            return []
+        item_list = items.get("item", [])
+        return [item_list] if isinstance(item_list, dict) else item_list
+    except Exception as e:
+        return []
 
 
 # ── CSS ──────────────────────────────────────────────────────────────────────
@@ -106,6 +125,7 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
 .badge-green  { background:#e8f5e9; color:#2e7d32; }
 .badge-blue   { background:#e3f2fd; color:#1565c0; }
 .badge-orange { background:#fff3e0; color:#e65100; }
+.badge-purple { background:#ede7f6; color:#4527a0; }
 .hint-box {
     background:linear-gradient(135deg,#e3f2fd,#f3e5f5); border-radius:12px;
     padding:30px 22px; text-align:center; color:#37474f;
@@ -116,8 +136,11 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
     background:#fff3cd; border:1px solid #ffc107; border-radius:10px;
     padding:14px 18px; color:#856404; font-size:.88rem;
 }
-.tag-집합 { background:#e8eaf6; color:#3949ab; }
-.tag-일반 { background:#e0f2f1; color:#00695c; }
+.raw-box {
+    background:#f8f9fa; border:1px solid #dee2e6; border-radius:10px;
+    padding:12px 16px; font-size:.75rem; font-family:monospace;
+    color:#495057; word-break:break-all; line-height:1.7; margin-bottom:12px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -133,9 +156,10 @@ st.markdown("""
 
 col_map, col_info = st.columns([6, 4], gap="medium")
 
-if "addr_info"     not in st.session_state: st.session_state.addr_info     = None
-if "building_data" not in st.session_state: st.session_state.building_data = None
-if "last_coord"    not in st.session_state: st.session_state.last_coord    = ""
+if "addr_info"      not in st.session_state: st.session_state.addr_info      = None
+if "building_basic" not in st.session_state: st.session_state.building_basic = None
+if "building_title" not in st.session_state: st.session_state.building_title = None
+if "last_coord"     not in st.session_state: st.session_state.last_coord     = ""
 
 coord_input = st.text_input("coord", value="", key="coord_box", label_visibility="collapsed")
 
@@ -143,28 +167,31 @@ if coord_input and coord_input != st.session_state.last_coord:
     st.session_state.last_coord = coord_input
     try:
         lat, lng = map(float, coord_input.split(","))
-
         addr_doc = get_jibun_address(lat, lng)
         bjd_doc  = get_region_code(lat, lng)
         st.session_state.addr_info = addr_doc
 
         if bjd_doc:
-            b_code = bjd_doc.get("code", "")
-            jibun  = addr_doc.get("address", {}) if addr_doc else {}
+            b_code  = bjd_doc.get("code", "")
+            jibun   = addr_doc.get("address", {}) if addr_doc else {}
             main_no = jibun.get("main_address_no", "0") or "0"
             sub_no  = jibun.get("sub_address_no",  "0") or "0"
 
             if len(b_code) >= 10:
-                result = get_building_info(b_code[:5], b_code[5:10], main_no, sub_no)
-                st.session_state.building_data = result
+                sc = b_code[:5]
+                bc = b_code[5:10]
+                st.session_state.building_basic = get_building_info(sc, bc, main_no, sub_no)
+                st.session_state.building_title = get_building_title(sc, bc, main_no, sub_no)
             else:
-                st.session_state.building_data = None
+                st.session_state.building_basic = None
+                st.session_state.building_title = None
         else:
-            st.session_state.building_data = None
-
+            st.session_state.building_basic = None
+            st.session_state.building_title = None
     except Exception as e:
-        st.session_state.addr_info     = {"error": str(e)}
-        st.session_state.building_data = None
+        st.session_state.addr_info      = {"error": str(e)}
+        st.session_state.building_basic = None
+        st.session_state.building_title = None
 
 MAP_HTML = """
 <!DOCTYPE html>
@@ -224,7 +251,7 @@ MAP_HTML = """
         }
         setTimeout(function() {
           document.getElementById('status').innerHTML = '📍 위도: ' + lat.toFixed(5) + ' / 경도: ' + lng.toFixed(5);
-        }, 1500);
+        }, 2000);
       });
     });
   };
@@ -265,69 +292,87 @@ with col_info:
             </div>
         </div>""", unsafe_allow_html=True)
 
-        bdata = st.session_state.building_data
+        # ── 표제부(상세) 우선 표시 ──
+        title_data = st.session_state.building_title
+        basic_data = st.session_state.building_basic
 
-        if bdata is None:
-            st.markdown('<div class="error-box">⚠️ 법정동 코드를 가져오지 못했습니다.</div>', unsafe_allow_html=True)
-        elif isinstance(bdata, dict) and "error" in bdata:
-            st.markdown(f'<div class="error-box">⚠️ API 오류: {bdata.get("error","")}</div>', unsafe_allow_html=True)
-        elif not bdata:
-            st.markdown('<div class="error-box">ℹ️ 해당 위치에 등록된 건축물대장 정보가 없습니다.</div>', unsafe_allow_html=True)
-        else:
-            for i, item in enumerate(bdata[:5]):
+        def fmt_area(v):
+            try: return f"{float(v):,.2f} ㎡" if float(v) > 0 else "-"
+            except: return str(v) if v else "-"
+
+        def fmt_date(v):
+            s = str(v).strip()
+            return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s) == 8 and s.isdigit() else (s if s else "-")
+
+        def val(v):
+            return str(v).strip() if v and str(v).strip() not in ["", "0", "None"] else "-"
+
+        if title_data and isinstance(title_data, list) and len(title_data) > 0:
+            for i, item in enumerate(title_data[:3]):
+                # 표제부 필드명
                 name     = (item.get("bldNm") or "").strip() or \
                            (item.get("splotNm") or "").strip() or \
-                           (item.get("platPlc") or f"건물 {i+1}")
-                use_nm   = item.get("mainPurpsCdNm", "-")
-                struct   = item.get("strctCdNm", "-")
-                floor_u  = item.get("grndFlrCnt", "-")
-                floor_d  = item.get("ugrndFlrCnt", "0")
-                area     = item.get("totArea", "-")
-                plat_area= item.get("platArea", "-")
-                height   = item.get("heit", "-")
-                approve  = item.get("useAprDay", "-")
-                fam_cnt  = item.get("hhldCnt", "-")
-                regstr   = item.get("regstrGbCdNm", "")   # 집합 / 일반
-                kind     = item.get("regstrKindCdNm", "")  # 총괄표제부 / 표제부 / 전유부
-
-                def fmt_area(v):
-                    try: return f"{float(v):,.2f} ㎡"
-                    except: return str(v)
-                def fmt_date(v):
-                    s = str(v)
-                    return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s) == 8 else s
+                           (item.get("newPlatPlc") or item.get("platPlc") or f"건물 {i+1}")
+                use_nm   = val(item.get("mainPurpsCdNm"))
+                struct   = val(item.get("strctCdNm"))
+                roof     = val(item.get("roofCdNm"))
+                floor_u  = val(item.get("grndFlrCnt"))
+                floor_d  = val(item.get("ugrndFlrCnt"))
+                area     = fmt_area(item.get("totArea"))
+                plat_area= fmt_area(item.get("platArea"))
+                bc_area  = fmt_area(item.get("archArea"))   # 건축면적
+                height   = val(item.get("heit"))
+                approve  = fmt_date(item.get("useAprDay"))
+                fam_cnt  = val(item.get("hhldCnt"))
+                ho_cnt   = val(item.get("hoCnt"))
+                prkg     = val(item.get("indrAutoUtcnt"))   # 옥내자주식
+                regstr   = val(item.get("regstrGbCdNm"))
+                kind     = val(item.get("regstrKindCdNm"))
 
                 badge_cls = "badge-green"  if "주거" in use_nm else \
-                            "badge-orange" if any(k in use_nm for k in ["상업","근린","업무"]) else \
+                            "badge-orange" if any(k in use_nm for k in ["상업","근린","업무","판매"]) else \
                             "badge-blue"
-                regstr_tag = f'<span class="badge tag-집합">{regstr} · {kind}</span>' if regstr else ""
+                kind_badge = f'<span class="badge badge-purple" style="font-size:.72rem">{regstr} · {kind}</span>' \
+                             if regstr != "-" else ""
 
-                fam_row = (f"<div class='data-row'><span class='data-label'>세대수</span>"
-                           f"<span class='data-value'>{fam_cnt}세대</span></div>"
-                           if str(fam_cnt) not in ["-", "0", "None", ""] else "")
-
-                height_row = (f"<div class='data-row'><span class='data-label'>높이</span>"
-                              f"<span class='data-value'>{height} m</span></div>"
-                              if str(height) not in ["-", "0", "0.0", "None", ""] else "")
+                rows = []
+                rows.append(f"<div class='data-row'><span class='data-label'>주용도</span><span class='data-value'><span class='badge {badge_cls}'>{use_nm}</span></span></div>")
+                if struct != "-": rows.append(f"<div class='data-row'><span class='data-label'>구조</span><span class='data-value'>{struct}</span></div>")
+                if roof   != "-": rows.append(f"<div class='data-row'><span class='data-label'>지붕</span><span class='data-value'>{roof}</span></div>")
+                rows.append(f"<div class='data-row'><span class='data-label'>층수</span><span class='data-value'>지상 {floor_u}층 / 지하 {floor_d}층</span></div>")
+                if area      != "-": rows.append(f"<div class='data-row'><span class='data-label'>연면적</span><span class='data-value'>{area}</span></div>")
+                if bc_area   != "-": rows.append(f"<div class='data-row'><span class='data-label'>건축면적</span><span class='data-value'>{bc_area}</span></div>")
+                if plat_area != "-": rows.append(f"<div class='data-row'><span class='data-label'>대지면적</span><span class='data-value'>{plat_area}</span></div>")
+                if height    != "-": rows.append(f"<div class='data-row'><span class='data-label'>높이</span><span class='data-value'>{height} m</span></div>")
+                if approve   != "-": rows.append(f"<div class='data-row'><span class='data-label'>사용승인일</span><span class='data-value'>{approve}</span></div>")
+                if fam_cnt   != "-": rows.append(f"<div class='data-row'><span class='data-label'>세대수</span><span class='data-value'>{fam_cnt}세대</span></div>")
+                if ho_cnt    != "-": rows.append(f"<div class='data-row'><span class='data-label'>호수</span><span class='data-value'>{ho_cnt}호</span></div>")
+                if prkg      != "-": rows.append(f"<div class='data-row'><span class='data-label'>옥내주차</span><span class='data-value'>{prkg}대</span></div>")
 
                 st.markdown(f"""
                 <div class="info-card">
-                    <h3>🏗️ {name} {regstr_tag}</h3>
-                    <div class="data-row">
-                        <span class="data-label">주용도</span>
-                        <span class="data-value"><span class="badge {badge_cls}">{use_nm}</span></span>
-                    </div>
-                    <div class="data-row"><span class="data-label">구조</span><span class="data-value">{struct}</span></div>
-                    <div class="data-row"><span class="data-label">층수</span><span class="data-value">지상 {floor_u}층 / 지하 {floor_d}층</span></div>
-                    <div class="data-row"><span class="data-label">연면적</span><span class="data-value">{fmt_area(area)}</span></div>
-                    <div class="data-row"><span class="data-label">대지면적</span><span class="data-value">{fmt_area(plat_area)}</span></div>
-                    {height_row}
-                    <div class="data-row"><span class="data-label">사용승인일</span><span class="data-value">{fmt_date(approve)}</span></div>
-                    {fam_row}
+                    <h3>🏗️ {name} {kind_badge}</h3>
+                    {"".join(rows)}
                 </div>""", unsafe_allow_html=True)
 
+        elif basic_data and isinstance(basic_data, list) and len(basic_data) > 0:
+            # 표제부 없으면 기본개요 표시
+            for i, item in enumerate(basic_data[:3]):
+                name  = (item.get("bldNm") or "").strip() or (item.get("platPlc") or f"건물 {i+1}")
+                regstr = val(item.get("regstrGbCdNm"))
+                kind   = val(item.get("regstrKindCdNm"))
+                kind_badge = f'<span class="badge badge-purple" style="font-size:.72rem">{regstr} · {kind}</span>' if regstr != "-" else ""
+                st.markdown(f"""
+                <div class="info-card">
+                    <h3>🏗️ {name} {kind_badge}</h3>
+                    <div class="raw-box">{str(item)[:600]}</div>
+                </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="error-box">ℹ️ 해당 위치에 등록된 건축물대장 정보가 없습니다.</div>', unsafe_allow_html=True)
+
         if st.button("🔄 초기화", use_container_width=True):
-            st.session_state.addr_info     = None
-            st.session_state.building_data = None
-            st.session_state.last_coord    = ""
+            st.session_state.addr_info      = None
+            st.session_state.building_basic = None
+            st.session_state.building_title = None
+            st.session_state.last_coord     = ""
             st.rerun()
