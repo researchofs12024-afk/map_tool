@@ -18,9 +18,7 @@ except Exception:
     BUILDING_API_KEY = "9619e124e16b9e57bad6cfefdc82f6c87749176260b4caff32eda964aad5de1b"
 
 
-def get_address_from_coords(lat, lng):
-    """카카오 좌표 → 주소 (지번 + 법정동코드 포함 버전)"""
-    # coord2regioncode API 사용 → b_code 포함된 응답 반환
+def get_region_code(lat, lng):
     url = "https://dapi.kakao.com/v2/local/geo/coord2regioncode.json"
     headers = {"Authorization": f"KakaoAK {KAKAO_REST_KEY}"}
     params  = {"x": lng, "y": lat}
@@ -28,16 +26,13 @@ def get_address_from_coords(lat, lng):
         resp = requests.get(url, headers=headers, params=params, timeout=10)
         resp.raise_for_status()
         docs = resp.json().get("documents", [])
-        # region_type == 'B' 가 법정동 (b_code 포함)
         bjd = next((d for d in docs if d.get("region_type") == "B"), None)
-        adm = next((d for d in docs if d.get("region_type") == "H"), None)
-        return bjd, adm, docs
-    except Exception as e:
-        return None, None, {"error": str(e)}
+        return bjd
+    except Exception:
+        return None
 
 
 def get_jibun_address(lat, lng):
-    """좌표 → 지번주소 (도로명도 함께)"""
     url = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
     headers = {"Authorization": f"KakaoAK {KAKAO_REST_KEY}"}
     params  = {"x": lng, "y": lat}
@@ -64,16 +59,12 @@ def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
     }
     try:
         resp = requests.get(url, params=params, timeout=10)
-        raw  = resp.text
-        try:
-            data = resp.json()
-        except Exception:
-            return {"error": f"JSON 파싱 실패: {raw[:300]}"}
+        data  = resp.json()
         body  = data.get("response", {}).get("body", {})
         total = body.get("totalCount", 0)
         items = body.get("items", {})
         if total == 0 or not items:
-            return {"empty": True, "params": params, "raw": raw[:500]}
+            return []
         item_list = items.get("item", [])
         if isinstance(item_list, dict):
             item_list = [item_list]
@@ -110,26 +101,23 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
 }
 .data-row:last-child { border-bottom:none; }
 .data-label { color:#6b7c8d; font-weight:500; min-width:130px; }
-.data-value { color:#1a2e3b; font-weight:600; text-align:right; }
+.data-value { color:#1a2e3b; font-weight:600; text-align:right; font-size:.85rem; }
 .badge { display:inline-block; padding:3px 10px; border-radius:20px; font-size:.78rem; font-weight:600; }
 .badge-green  { background:#e8f5e9; color:#2e7d32; }
 .badge-blue   { background:#e3f2fd; color:#1565c0; }
 .badge-orange { background:#fff3e0; color:#e65100; }
 .hint-box {
     background:linear-gradient(135deg,#e3f2fd,#f3e5f5); border-radius:12px;
-    padding:18px 22px; text-align:center; color:#37474f;
-    font-size:.9rem; line-height:1.7;
+    padding:30px 22px; text-align:center; color:#37474f;
+    font-size:.9rem; line-height:1.9;
 }
-.hint-box .icon { font-size:2rem; margin-bottom:8px; }
+.hint-box .icon { font-size:2.4rem; margin-bottom:10px; }
 .error-box {
     background:#fff3cd; border:1px solid #ffc107; border-radius:10px;
     padding:14px 18px; color:#856404; font-size:.88rem;
 }
-.debug-box {
-    background:#f0f4ff; border:1px solid #90caf9; border-radius:10px;
-    padding:14px 18px; color:#1a237e; font-size:.75rem;
-    font-family: monospace; word-break: break-all; line-height:1.8;
-}
+.tag-집합 { background:#e8eaf6; color:#3949ab; }
+.tag-일반 { background:#e0f2f1; color:#00695c; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -148,64 +136,35 @@ col_map, col_info = st.columns([6, 4], gap="medium")
 if "addr_info"     not in st.session_state: st.session_state.addr_info     = None
 if "building_data" not in st.session_state: st.session_state.building_data = None
 if "last_coord"    not in st.session_state: st.session_state.last_coord    = ""
-if "debug_info"    not in st.session_state: st.session_state.debug_info    = {}
 
 coord_input = st.text_input("coord", value="", key="coord_box", label_visibility="collapsed")
 
 if coord_input and coord_input != st.session_state.last_coord:
     st.session_state.last_coord = coord_input
     try:
-        lat_str, lng_str = coord_input.split(",")
-        lat = float(lat_str.strip())
-        lng = float(lng_str.strip())
+        lat, lng = map(float, coord_input.split(","))
 
-        # 1) 지번+도로명 주소
         addr_doc = get_jibun_address(lat, lng)
+        bjd_doc  = get_region_code(lat, lng)
         st.session_state.addr_info = addr_doc
 
-        # 2) 법정동 코드 포함 regioncode API
-        bjd_doc, adm_doc, all_docs = get_address_from_coords(lat, lng)
-
-        debug = {
-            "lat": lat, "lng": lng,
-            "bjd_doc": str(bjd_doc)[:300] if bjd_doc else "None",
-        }
-
         if bjd_doc:
-            b_code  = bjd_doc.get("code", "")   # coord2regioncode에서는 'code' 필드
-            debug["b_code"] = b_code
-
-            # 지번 주소에서 번지 파싱
-            jibun   = addr_doc.get("address", {}) if addr_doc else {}
+            b_code = bjd_doc.get("code", "")
+            jibun  = addr_doc.get("address", {}) if addr_doc else {}
             main_no = jibun.get("main_address_no", "0") or "0"
             sub_no  = jibun.get("sub_address_no",  "0") or "0"
 
-            debug["main_no"] = main_no
-            debug["sub_no"]  = sub_no
-
             if len(b_code) >= 10:
-                sigungu_cd = b_code[:5]
-                bjdong_cd  = b_code[5:10]
-                debug["sigungu_cd"] = sigungu_cd
-                debug["bjdong_cd"]  = bjdong_cd
-
-                result = get_building_info(sigungu_cd, bjdong_cd, main_no, sub_no)
+                result = get_building_info(b_code[:5], b_code[5:10], main_no, sub_no)
                 st.session_state.building_data = result
-                debug["api_result"] = str(result)[:400]
             else:
                 st.session_state.building_data = None
-                debug["error"] = f"b_code 길이 부족: '{b_code}'"
         else:
             st.session_state.building_data = None
-            debug["error"] = "bjd_doc 없음"
-
-        st.session_state.debug_info = debug
 
     except Exception as e:
-        import traceback
         st.session_state.addr_info     = {"error": str(e)}
         st.session_state.building_data = None
-        st.session_state.debug_info    = {"exception": traceback.format_exc()}
 
 MAP_HTML = """
 <!DOCTYPE html>
@@ -250,11 +209,11 @@ MAP_HTML = """
         var lng = mouseEvent.latLng.getLng();
         if (marker) marker.setMap(null);
         marker = new kakao.maps.Marker({ position: mouseEvent.latLng, map: map });
-        document.getElementById('status').innerHTML = '📍 위도: ' + lat.toFixed(5) + ' / 경도: ' + lng.toFixed(5);
+        document.getElementById('status').innerHTML = '⏳ 조회 중...';
         var inputs = window.parent.document.querySelectorAll('input[type="text"]');
         for (var i = 0; i < inputs.length; i++) {
-          var inp = inputs[i];
-          var coord = lat.toFixed(7) + ',' + lng.toFixed(7);
+          var inp    = inputs[i];
+          var coord  = lat.toFixed(7) + ',' + lng.toFixed(7);
           var setter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
           setter.call(inp, coord);
           inp.dispatchEvent(new inp.ownerDocument.defaultView.Event('input', { bubbles: true }));
@@ -263,6 +222,9 @@ MAP_HTML = """
           inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keyup',    { key:'Enter', keyCode:13, bubbles:true }));
           break;
         }
+        setTimeout(function() {
+          document.getElementById('status').innerHTML = '📍 위도: ' + lat.toFixed(5) + ' / 경도: ' + lng.toFixed(5);
+        }, 1500);
       });
     });
   };
@@ -279,9 +241,12 @@ with col_map:
 
 with col_info:
     if st.session_state.addr_info is None:
-        st.markdown("""<div class="hint-box"><div class="icon">🗺️</div>
-        <strong>지도를 클릭해 건물 정보를 조회하세요</strong><br>
-        건물 위치를 클릭하면 건축물대장 정보가 표시됩니다</div>""", unsafe_allow_html=True)
+        st.markdown("""
+        <div class="hint-box">
+            <div class="icon">🗺️</div>
+            <strong>지도를 클릭해 건물 정보를 조회하세요</strong><br>
+            건물 위치를 클릭하면<br>건축물대장 정보가 이 곳에 표시됩니다
+        </div>""", unsafe_allow_html=True)
     else:
         addr_doc = st.session_state.addr_info
         road  = addr_doc.get("road_address") if addr_doc else None
@@ -300,57 +265,63 @@ with col_info:
             </div>
         </div>""", unsafe_allow_html=True)
 
-        # 디버그 박스
-        if st.session_state.debug_info:
-            d = st.session_state.debug_info
-            lines = "<br>".join(f"<b>{k}</b>: {v}" for k, v in d.items())
-            st.markdown(f'<div class="debug-box">🔍 디버그<br>{lines}</div>', unsafe_allow_html=True)
-
         bdata = st.session_state.building_data
+
         if bdata is None:
             st.markdown('<div class="error-box">⚠️ 법정동 코드를 가져오지 못했습니다.</div>', unsafe_allow_html=True)
         elif isinstance(bdata, dict) and "error" in bdata:
             st.markdown(f'<div class="error-box">⚠️ API 오류: {bdata.get("error","")}</div>', unsafe_allow_html=True)
-        elif isinstance(bdata, dict) and bdata.get("empty"):
-            st.markdown(f'<div class="error-box">ℹ️ 건축물대장 없음<br><small>{bdata.get("raw","")[:200]}</small></div>', unsafe_allow_html=True)
         elif not bdata:
-            st.markdown('<div class="error-box">ℹ️ 건축물대장 정보가 없습니다.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="error-box">ℹ️ 해당 위치에 등록된 건축물대장 정보가 없습니다.</div>', unsafe_allow_html=True)
         else:
-            for i, item in enumerate(bdata[:3]):
-                name      = item.get("bldNm") or item.get("platPlcNm") or f"건물 {i+1}"
-                use_nm    = item.get("mainPurpsCdNm", "-")
-                struct    = item.get("strctCdNm", "-")
-                floor_u   = item.get("grndFlrCnt", "-")
-                floor_d   = item.get("ugrndFlrCnt", "0")
-                area      = item.get("totArea", "-")
-                plat_area = item.get("platArea", "-")
-                height    = item.get("heit", "-")
-                approve   = item.get("useAprDay", "-")
-                fam_cnt   = item.get("hhldCnt", "-")
+            for i, item in enumerate(bdata[:5]):
+                name     = (item.get("bldNm") or "").strip() or \
+                           (item.get("splotNm") or "").strip() or \
+                           (item.get("platPlc") or f"건물 {i+1}")
+                use_nm   = item.get("mainPurpsCdNm", "-")
+                struct   = item.get("strctCdNm", "-")
+                floor_u  = item.get("grndFlrCnt", "-")
+                floor_d  = item.get("ugrndFlrCnt", "0")
+                area     = item.get("totArea", "-")
+                plat_area= item.get("platArea", "-")
+                height   = item.get("heit", "-")
+                approve  = item.get("useAprDay", "-")
+                fam_cnt  = item.get("hhldCnt", "-")
+                regstr   = item.get("regstrGbCdNm", "")   # 집합 / 일반
+                kind     = item.get("regstrKindCdNm", "")  # 총괄표제부 / 표제부 / 전유부
 
                 def fmt_area(v):
                     try: return f"{float(v):,.2f} ㎡"
                     except: return str(v)
                 def fmt_date(v):
                     s = str(v)
-                    return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s)==8 else s
+                    return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s) == 8 else s
 
-                badge_cls = "badge-green" if "주거" in use_nm else \
-                            "badge-orange" if any(k in use_nm for k in ["상업","근린"]) else "badge-blue"
+                badge_cls = "badge-green"  if "주거" in use_nm else \
+                            "badge-orange" if any(k in use_nm for k in ["상업","근린","업무"]) else \
+                            "badge-blue"
+                regstr_tag = f'<span class="badge tag-집합">{regstr} · {kind}</span>' if regstr else ""
+
                 fam_row = (f"<div class='data-row'><span class='data-label'>세대수</span>"
                            f"<span class='data-value'>{fam_cnt}세대</span></div>"
-                           if fam_cnt and fam_cnt != "-" else "")
+                           if str(fam_cnt) not in ["-", "0", "None", ""] else "")
+
+                height_row = (f"<div class='data-row'><span class='data-label'>높이</span>"
+                              f"<span class='data-value'>{height} m</span></div>"
+                              if str(height) not in ["-", "0", "0.0", "None", ""] else "")
 
                 st.markdown(f"""
                 <div class="info-card">
-                    <h3>🏗️ {name}</h3>
-                    <div class="data-row"><span class="data-label">주용도</span>
-                        <span class="data-value"><span class="badge {badge_cls}">{use_nm}</span></span></div>
+                    <h3>🏗️ {name} {regstr_tag}</h3>
+                    <div class="data-row">
+                        <span class="data-label">주용도</span>
+                        <span class="data-value"><span class="badge {badge_cls}">{use_nm}</span></span>
+                    </div>
                     <div class="data-row"><span class="data-label">구조</span><span class="data-value">{struct}</span></div>
                     <div class="data-row"><span class="data-label">층수</span><span class="data-value">지상 {floor_u}층 / 지하 {floor_d}층</span></div>
                     <div class="data-row"><span class="data-label">연면적</span><span class="data-value">{fmt_area(area)}</span></div>
                     <div class="data-row"><span class="data-label">대지면적</span><span class="data-value">{fmt_area(plat_area)}</span></div>
-                    <div class="data-row"><span class="data-label">높이</span><span class="data-value">{height} m</span></div>
+                    {height_row}
                     <div class="data-row"><span class="data-label">사용승인일</span><span class="data-value">{fmt_date(approve)}</span></div>
                     {fam_row}
                 </div>""", unsafe_allow_html=True)
@@ -359,5 +330,4 @@ with col_info:
             st.session_state.addr_info     = None
             st.session_state.building_data = None
             st.session_state.last_coord    = ""
-            st.session_state.debug_info    = {}
             st.rerun()
