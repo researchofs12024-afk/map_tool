@@ -13,12 +13,10 @@ try:
     KAKAO_JS_KEY     = st.secrets["KAKAO_JS_KEY"]
     KAKAO_REST_KEY   = st.secrets["KAKAO_REST_KEY"]
     BUILDING_API_KEY = st.secrets["BUILDING_API_KEY"]
-    VWORLD_KEY       = st.secrets["VWORLD_KEY"]
 except Exception:
     KAKAO_JS_KEY     = "057a4a253017791fe6072d7b089a063a"
     KAKAO_REST_KEY   = "c5af33c0d1d6a654362d3fea152cc076"
     BUILDING_API_KEY = "9619e124e16b9e57bad6cfefdc82f6c87749176260b4caff32eda964aad5de1b"
-    VWORLD_KEY       = "F12043F0-86DF-3395-9004-27A377FD5FB6"
 
 
 def get_region_code(lat, lng):
@@ -116,7 +114,8 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
     padding:30px 22px; text-align:center; color:#37474f; font-size:.9rem; line-height:1.9;
 }
 .hint-box .icon { font-size:2.4rem; margin-bottom:10px; }
-.error-box { background:#fff3cd; border:1px solid #ffc107; border-radius:10px; padding:14px 18px; color:#856404; font-size:.88rem; }
+.error-box { background:#fff3cd; border:1px solid #ffc107; border-radius:10px;
+             padding:14px 18px; color:#856404; font-size:.88rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -125,7 +124,7 @@ st.markdown("""
     <div style="font-size:2.4rem">🏢</div>
     <div>
         <h1>건축물대장 조회 서비스</h1>
-        <p>클릭한 필지가 하이라이트되고 건축물대장 정보를 즉시 조회합니다</p>
+        <p>지적편집도 위에서 클릭하면 건축물대장 정보를 즉시 조회합니다</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -157,7 +156,6 @@ if coord_input and coord_input != st.session_state.last_coord:
     except Exception as e:
         st.session_state.addr_info = {"error": str(e)}
 
-# VWorld 키를 JS에 전달 (브라우저에서 직접 호출 + corsproxy.io 우회)
 MAP_HTML = f"""
 <!DOCTYPE html>
 <html>
@@ -175,28 +173,49 @@ MAP_HTML = f"""
     font-size:13px; color:#37474f; box-shadow:0 2px 12px rgba(0,0,0,.15);
     z-index:10; backdrop-filter:blur(4px); white-space:nowrap;
   }}
+  #map-type-btns {{
+    position:absolute; bottom:14px; left:14px; z-index:10;
+    display:flex; gap:6px;
+  }}
+  .map-btn {{
+    background:rgba(255,255,255,.95); border:none; border-radius:8px;
+    padding:6px 12px; font-size:12px; font-weight:600; cursor:pointer;
+    box-shadow:0 2px 8px rgba(0,0,0,.15); color:#37474f;
+    transition: all .15s;
+  }}
+  .map-btn.active {{ background:#1a2e3b; color:#fff; }}
   .wrapper {{ position:relative; }}
 </style>
 </head>
 <body>
 <div class="wrapper">
-  <div id="status">🖱️ 지도를 클릭하면 필지를 조회합니다</div>
+  <div id="status">🖱️ 지도를 클릭하면 건물 정보를 조회합니다</div>
   <div id="map"></div>
+  <div id="map-type-btns">
+    <button class="map-btn active" onclick="setMapType('normal')">일반</button>
+    <button class="map-btn" onclick="setMapType('cadastral')">지적편집도 🗺</button>
+    <button class="map-btn" onclick="setMapType('hybrid')">스카이뷰</button>
+  </div>
 </div>
 <script>
-var VWORLD_KEY = '{VWORLD_KEY}';
+var map, marker, circle, overlay;
+var currentMapType = 'normal';
 
-function point_in_polygon(px, py, coords) {{
-  var inside = false;
-  var n = coords.length, j = n - 1;
-  for (var i = 0; i < n; i++) {{
-    var xi = coords[i][0], yi = coords[i][1];
-    var xj = coords[j][0], yj = coords[j][1];
-    if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi))
-      inside = !inside;
-    j = i;
+function setMapType(type) {{
+  document.querySelectorAll('.map-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+  event.target.classList.add('active');
+  currentMapType = type;
+
+  if (type === 'normal') {{
+    map.setMapTypeId(kakao.maps.MapTypeId.ROADMAP);
+    map.removeOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);
+  }} else if (type === 'cadastral') {{
+    map.setMapTypeId(kakao.maps.MapTypeId.ROADMAP);
+    map.addOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);  // 지적편집도
+  }} else if (type === 'hybrid') {{
+    map.setMapTypeId(kakao.maps.MapTypeId.HYBRID);
+    map.removeOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);
   }}
-  return inside;
 }}
 
 (function() {{
@@ -204,80 +223,56 @@ function point_in_polygon(px, py, coords) {{
   script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_JS_KEY}&autoload=false';
   script.onload = function() {{
     kakao.maps.load(function() {{
-      var map = new kakao.maps.Map(document.getElementById('map'), {{
-        center: new kakao.maps.LatLng(37.5665, 126.9780), level: 4
+      map = new kakao.maps.Map(document.getElementById('map'), {{
+        center: new kakao.maps.LatLng(37.5665, 126.9780), level: 3
       }});
-      map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
-      map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
 
-      var polygon = null, marker = null;
+      // 기본: 지적편집도 오버레이 ON
+      map.addOverlayMapTypeId(kakao.maps.MapTypeId.USE_DISTRICT);
+      document.querySelectorAll('.map-btn')[1].classList.add('active');
+      document.querySelectorAll('.map-btn')[0].classList.remove('active');
 
-      function drawPolygon(geom) {{
-        if (polygon) polygon.setMap(null);
-        if (!geom) return;
-        var rings = geom.type === 'Polygon' ? geom.coordinates[0] : geom.coordinates[0][0];
-        var path  = rings.map(function(c) {{ return new kakao.maps.LatLng(c[1], c[0]); }});
-        var bounds = new kakao.maps.LatLngBounds();
-        path.forEach(function(p) {{ bounds.extend(p); }});
-        polygon = new kakao.maps.Polygon({{
-          map: map, path: path,
-          strokeWeight: 3, strokeColor: '#FF6B35', strokeOpacity: 1,
-          fillColor: '#FF6B35', fillOpacity: 0.28
-        }});
-        map.setBounds(bounds, 60);
-        document.getElementById('status').innerHTML = '🟧 필지 하이라이트 완료';
-      }}
-
-      function fetchParcel(lat, lng) {{
-        var d   = 0.0005;
-        // corsproxy.io 를 통해 CORS 우회
-        var target = 'https://api.vworld.kr/req/wfs'
-          + '?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature'
-          + '&TYPENAME=lt_c_lhpllnd&SRSNAME=EPSG:4326'
-          + '&BBOX=' + (lng-d) + ',' + (lat-d) + ',' + (lng+d) + ',' + (lat+d) + ',EPSG:4326'
-          + '&OUTPUT=application/json'
-          + '&KEY=' + VWORLD_KEY;
-
-        var proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(target);
-
-        fetch(proxyUrl)
-          .then(function(r) {{ return r.json(); }})
-          .then(function(data) {{
-            var features = data.features || [];
-            if (!features.length) {{
-              document.getElementById('status').innerHTML = '⚠️ 필지 경계 없음';
-              return;
-            }}
-            // 클릭 좌표 포함 필지 선택
-            var best = null;
-            for (var i = 0; i < features.length; i++) {{
-              var geom = features[i].geometry;
-              if (!geom) continue;
-              var rings = geom.type === 'Polygon' ? [geom.coordinates[0]] : geom.coordinates.map(function(g){{return g[0];}});
-              for (var r = 0; r < rings.length; r++) {{
-                if (point_in_polygon(lng, lat, rings[r])) {{
-                  best = geom; break;
-                }}
-              }}
-              if (best) break;
-            }}
-            drawPolygon(best || features[0].geometry);
-          }})
-          .catch(function(e) {{
-            document.getElementById('status').innerHTML = '⚠️ 필지 조회 실패: ' + e.message;
-          }});
-      }}
+      map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
 
       kakao.maps.event.addListener(map, 'click', function(e) {{
         var lat = e.latLng.getLat(), lng = e.latLng.getLng();
+
+        // 기존 마커/원 제거
         if (marker) marker.setMap(null);
+        if (circle) circle.setMap(null);
+        if (overlay) overlay.setMap(null);
+
+        // 마커
         marker = new kakao.maps.Marker({{ position: e.latLng, map: map }});
-        document.getElementById('status').innerHTML = '⏳ 필지 조회 중...';
 
-        // 필지 하이라이트 (브라우저 JS → corsproxy → VWorld)
-        fetchParcel(lat, lng);
+        // 하이라이트 원 (필지 강조 효과)
+        circle = new kakao.maps.Circle({{
+          map:           map,
+          center:        e.latLng,
+          radius:        18,
+          strokeWeight:  3,
+          strokeColor:   '#FF6B35',
+          strokeOpacity: 1,
+          fillColor:     '#FF6B35',
+          fillOpacity:   0.25,
+        }});
 
-        // 건축물대장 (Streamlit Python)
+        // 펄스 애니메이션 원
+        var pulseCircle = new kakao.maps.Circle({{
+          map:           map,
+          center:        e.latLng,
+          radius:        35,
+          strokeWeight:  2,
+          strokeColor:   '#FF6B35',
+          strokeOpacity: 0.5,
+          fillColor:     '#FF6B35',
+          fillOpacity:   0.08,
+        }});
+        setTimeout(function() {{ pulseCircle.setMap(null); }}, 1500);
+
+        document.getElementById('status').innerHTML = '⏳ 조회 중...';
+
+        // Streamlit에 좌표 전달
         var inputs = window.parent.document.querySelectorAll('input[type="text"]');
         if (inputs.length > 0) {{
           var inp = inputs[0], coord = lat.toFixed(7) + ',' + lng.toFixed(7);
@@ -289,6 +284,10 @@ function point_in_polygon(px, py, coords) {{
               : new inp.ownerDocument.defaultView.Event(t, {{bubbles:true}}));
           }});
         }}
+
+        setTimeout(function() {{
+          document.getElementById('status').innerHTML = '📍 위도: ' + lat.toFixed(5) + ' / 경도: ' + lng.toFixed(5);
+        }}, 2500);
       }});
     }});
   }};
@@ -307,9 +306,9 @@ with col_info:
         st.markdown("""
         <div class="hint-box">
             <div class="icon">🗺️</div>
-            <strong>지도를 클릭해 필지를 선택하세요</strong><br>
-            클릭한 필지가 <span style="color:#FF6B35;font-weight:700">주황색</span>으로 하이라이트되고<br>
-            건축물대장 정보가 표시됩니다
+            <strong>지도를 클릭해 건물을 조회하세요</strong><br>
+            하단 <b>지적편집도</b> 버튼으로 필지 경계를 확인하고<br>
+            클릭하면 건축물대장 정보가 표시됩니다
         </div>""", unsafe_allow_html=True)
     else:
         addr_doc = st.session_state.addr_info
@@ -360,9 +359,11 @@ with col_info:
                 prkg     = val(item.get("indrAutoUtcnt"))
                 regstr   = val(item.get("regstrGbCdNm"))
                 kind     = val(item.get("regstrKindCdNm"))
+
                 badge_cls  = "badge-green" if "주거" in use_nm else \
                              "badge-orange" if any(k in use_nm for k in ["상업","근린","업무","판매"]) else "badge-blue"
                 kind_badge = f'<span class="badge badge-purple" style="font-size:.72rem">{regstr} · {kind}</span>' if regstr != "-" else ""
+
                 rows = [f"<div class='data-row'><span class='data-label'>주용도</span><span class='data-value'><span class='badge {badge_cls}'>{use_nm}</span></span></div>"]
                 for label, v in [("구조",struct),("지붕",roof)]:
                     if v != "-": rows.append(f"<div class='data-row'><span class='data-label'>{label}</span><span class='data-value'>{v}</span></div>")
@@ -374,6 +375,7 @@ with col_info:
                 if fam_cnt != "-": rows.append(f"<div class='data-row'><span class='data-label'>세대수</span><span class='data-value'>{fam_cnt}세대</span></div>")
                 if ho_cnt  != "-": rows.append(f"<div class='data-row'><span class='data-label'>호수</span><span class='data-value'>{ho_cnt}호</span></div>")
                 if prkg    != "-": rows.append(f"<div class='data-row'><span class='data-label'>옥내주차</span><span class='data-value'>{prkg}대</span></div>")
+
                 st.markdown(f"""
                 <div class="info-card">
                     <h3>🏗️ {name} {kind_badge}</h3>
