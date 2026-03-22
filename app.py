@@ -32,24 +32,20 @@ def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
     }
     try:
         resp = requests.get(url, params=params, timeout=10)
-        raw = resp.text  # 디버그용 원문 보존
+        raw = resp.text
         try:
             data = resp.json()
         except Exception:
             return {"error": f"JSON 파싱 실패: {raw[:300]}"}
-
-        body = data.get("response", {}).get("body", {})
+        body  = data.get("response", {}).get("body", {})
         total = body.get("totalCount", 0)
         items = body.get("items", {})
-
         if total == 0 or not items:
             return {"empty": True, "params": params, "raw": raw[:500]}
-
         item_list = items.get("item", [])
         if isinstance(item_list, dict):
             item_list = [item_list]
         return item_list
-
     except Exception as e:
         return {"error": str(e)}
 
@@ -104,15 +100,14 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
     padding:18px 22px; text-align:center; color:#37474f;
     font-size:.9rem; line-height:1.7;
 }
-.hint-box .icon { font-size:2rem; margin-bottom:8px; }
 .error-box {
     background:#fff3cd; border:1px solid #ffc107; border-radius:10px;
     padding:14px 18px; color:#856404; font-size:.88rem;
 }
 .debug-box {
     background:#f0f4ff; border:1px solid #90caf9; border-radius:10px;
-    padding:14px 18px; color:#1a237e; font-size:.78rem;
-    font-family: monospace; word-break: break-all;
+    padding:14px 18px; color:#1a237e; font-size:.75rem;
+    font-family: monospace; word-break: break-all; line-height:1.8;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -149,36 +144,50 @@ if coord_input and coord_input != st.session_state.last_coord:
         debug = {"lat": lat, "lng": lng}
 
         if addr_doc and "error" not in addr_doc:
-            jibun   = addr_doc.get("address", {})
-            b_code  = jibun.get("b_code", "")
-            main_no = jibun.get("main_address_no", "0")
-            sub_no  = jibun.get("sub_address_no",  "0")
-            sigungu_cd = b_code[:5]   if len(b_code) >= 5  else ""
-            bjdong_cd  = b_code[5:10] if len(b_code) >= 10 else ""
+            # ── 전체 address 객체 덤프해서 실제 필드 확인 ──
+            jibun = addr_doc.get("address", {})
+            debug["address_전체"] = str(jibun)  # 전체 필드 출력
 
-            debug["b_code"]     = b_code
-            debug["sigungu_cd"] = sigungu_cd
-            debug["bjdong_cd"]  = bjdong_cd
-            debug["main_no"]    = main_no
-            debug["sub_no"]     = sub_no
+            # 카카오 API 실제 필드명: b_code → 없을 수 있음, 대신 다른 필드 시도
+            b_code  = (jibun.get("b_code") or
+                       jibun.get("bcode") or
+                       jibun.get("code") or "")
+            main_no = (jibun.get("main_address_no") or
+                       jibun.get("mainAddressNo") or
+                       jibun.get("mountain_yn") or "0")  # 실제값 확인용
+            sub_no  = (jibun.get("sub_address_no") or
+                       jibun.get("subAddressNo") or "0")
 
-            if sigungu_cd and bjdong_cd:
+            # address_name에서 직접 파싱 시도 (예: "서울 중구 소공동 1")
+            addr_name = jibun.get("address_name", "")
+            debug["address_name"] = addr_name
+            debug["b_code_raw"]   = b_code
+            debug["main_no_raw"]  = main_no
+            debug["sub_no_raw"]   = sub_no
+
+            # b_code가 있으면 코드 분리
+            if b_code and len(b_code) >= 10:
+                sigungu_cd = b_code[:5]
+                bjdong_cd  = b_code[5:10]
+                debug["sigungu_cd"] = sigungu_cd
+                debug["bjdong_cd"]  = bjdong_cd
+
                 result = get_building_info(sigungu_cd, bjdong_cd, main_no, sub_no)
                 st.session_state.building_data = result
-                debug["api_result_type"] = str(type(result))
-                if isinstance(result, dict):
-                    debug["api_result"] = result
+                debug["api_result"] = str(result)[:400]
             else:
                 st.session_state.building_data = None
-                debug["error"] = "sigungu_cd 또는 bjdong_cd 없음"
+                debug["error"] = f"b_code 없음 또는 짧음: '{b_code}'"
         else:
             st.session_state.building_data = None
+            debug["addr_error"] = str(addr_doc)
 
         st.session_state.debug_info = debug
 
     except Exception as e:
         st.session_state.addr_info     = {"error": str(e)}
         st.session_state.building_data = None
+        st.session_state.debug_info    = {"exception": str(e)}
 
 MAP_HTML = """
 <!DOCTYPE html>
@@ -189,10 +198,7 @@ MAP_HTML = """
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family: sans-serif; background:#f8fafc; }
-  #map {
-    width:100%; height:500px; border-radius:12px; overflow:hidden;
-    box-shadow:0 4px 20px rgba(0,0,0,.12);
-  }
+  #map { width:100%; height:500px; border-radius:12px; overflow:hidden; box-shadow:0 4px 20px rgba(0,0,0,.12); }
   #status {
     position:absolute; top:10px; left:50%; transform:translateX(-50%);
     background:rgba(255,255,255,.95); border-radius:24px;
@@ -216,34 +222,23 @@ MAP_HTML = """
   script.onload = function() {
     kakao.maps.load(function() {
       var container = document.getElementById('map');
-      var options = {
-        center: new kakao.maps.LatLng(37.5665, 126.9780),
-        level: 4
-      };
+      var options = { center: new kakao.maps.LatLng(37.5665, 126.9780), level: 4 };
       var map    = new kakao.maps.Map(container, options);
       var marker = null;
-
       map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
       map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
-
       kakao.maps.event.addListener(map, 'click', function(mouseEvent) {
         var lat = mouseEvent.latLng.getLat();
         var lng = mouseEvent.latLng.getLng();
-
         if (marker) marker.setMap(null);
         marker = new kakao.maps.Marker({ position: mouseEvent.latLng, map: map });
-
-        document.getElementById('status').innerHTML =
-          '📍 위도: ' + lat.toFixed(5) + ' / 경도: ' + lng.toFixed(5);
-
+        document.getElementById('status').innerHTML = '📍 위도: ' + lat.toFixed(5) + ' / 경도: ' + lng.toFixed(5);
         var inputs = window.parent.document.querySelectorAll('input[type="text"]');
         for (var i = 0; i < inputs.length; i++) {
           var inp = inputs[i];
           var coord = lat.toFixed(7) + ',' + lng.toFixed(7);
-          var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-            window.parent.HTMLInputElement.prototype, 'value'
-          ).set;
-          nativeInputValueSetter.call(inp, coord);
+          var setter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
+          setter.call(inp, coord);
           inp.dispatchEvent(new inp.ownerDocument.defaultView.Event('input', { bubbles: true }));
           inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keydown',  { key:'Enter', keyCode:13, bubbles:true }));
           inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keypress', { key:'Enter', keyCode:13, bubbles:true }));
@@ -253,9 +248,7 @@ MAP_HTML = """
       });
     });
   };
-  script.onerror = function() {
-    document.getElementById('status').innerHTML = '❌ 카카오맵 로드 실패';
-  };
+  script.onerror = function() { document.getElementById('status').innerHTML = '❌ 카카오맵 로드 실패'; };
   document.head.appendChild(script);
 })();
 </script>
@@ -268,68 +261,41 @@ with col_map:
 
 with col_info:
     if st.session_state.addr_info is None:
-        st.markdown("""
-        <div class="hint-box">
-            <div class="icon">🗺️</div>
-            <strong>지도를 클릭해 건물 정보를 조회하세요</strong><br>
-            건물 위치를 클릭하면<br>건축물대장 정보가 이 곳에 표시됩니다
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("""<div class="hint-box"><div style="font-size:2rem">🗺️</div>
+        <strong>지도를 클릭해 건물 정보를 조회하세요</strong></div>""", unsafe_allow_html=True)
     else:
         addr_doc = st.session_state.addr_info
-
-        if "error" in addr_doc:
-            st.markdown(f'<div class="error-box">⚠️ 주소 조회 오류: {addr_doc["error"]}</div>',
-                        unsafe_allow_html=True)
-        else:
+        if "error" not in addr_doc:
             road  = addr_doc.get("road_address")
             jibun = addr_doc.get("address", {})
-            road_name  = road.get("address_name", "없음") if road else "없음"
-            jibun_name = jibun.get("address_name", "없음")
-
             st.markdown(f"""
             <div class="info-card">
                 <h3>📍 위치 정보</h3>
                 <div class="data-row">
                     <span class="data-label">도로명 주소</span>
-                    <span class="data-value">{road_name}</span>
+                    <span class="data-value">{road.get("address_name","없음") if road else "없음"}</span>
                 </div>
                 <div class="data-row">
                     <span class="data-label">지번 주소</span>
-                    <span class="data-value">{jibun_name}</span>
+                    <span class="data-value">{jibun.get("address_name","없음")}</span>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
 
-        # ── 디버그 정보 표시 (원인 파악용) ──
+        # 디버그 박스
         if st.session_state.debug_info:
             d = st.session_state.debug_info
-            st.markdown(f"""
-            <div class="debug-box">
-                <b>🔍 디버그 정보</b><br>
-                b_code: {d.get('b_code','?')}<br>
-                sigungu_cd: {d.get('sigungu_cd','?')}<br>
-                bjdong_cd: {d.get('bjdong_cd','?')}<br>
-                main_no: {d.get('main_no','?')}<br>
-                sub_no: {d.get('sub_no','?')}<br>
-                결과 타입: {d.get('api_result_type','?')}<br>
-                API 결과: {str(d.get('api_result', ''))[:300]}
-            </div>
-            """, unsafe_allow_html=True)
+            lines = "<br>".join(f"<b>{k}</b>: {v}" for k, v in d.items())
+            st.markdown(f'<div class="debug-box">🔍 디버그<br>{lines}</div>', unsafe_allow_html=True)
 
         bdata = st.session_state.building_data
         if bdata is None:
-            st.markdown('<div class="error-box">⚠️ 법정동 코드를 확인할 수 없습니다.</div>',
-                        unsafe_allow_html=True)
+            st.markdown('<div class="error-box">⚠️ b_code를 가져오지 못했습니다. 디버그 정보를 확인하세요.</div>', unsafe_allow_html=True)
         elif isinstance(bdata, dict) and "error" in bdata:
-            st.markdown(f'<div class="error-box">⚠️ API 오류: {bdata.get("error","")}<br>응답: {str(bdata.get("raw",""))[:200]}</div>',
-                        unsafe_allow_html=True)
+            st.markdown(f'<div class="error-box">⚠️ API 오류: {bdata.get("error","")}</div>', unsafe_allow_html=True)
         elif isinstance(bdata, dict) and bdata.get("empty"):
-            st.markdown(f'<div class="error-box">ℹ️ 건축물대장 없음<br>파라미터: {bdata.get("params",{})}<br>응답: {bdata.get("raw","")[:200]}</div>',
-                        unsafe_allow_html=True)
+            st.markdown(f'<div class="error-box">ℹ️ 건축물대장 없음<br>{bdata.get("raw","")[:200]}</div>', unsafe_allow_html=True)
         elif not bdata:
-            st.markdown('<div class="error-box">ℹ️ 건축물대장 정보가 없습니다.</div>',
-                        unsafe_allow_html=True)
+            st.markdown('<div class="error-box">ℹ️ 건축물대장 정보가 없습니다.</div>', unsafe_allow_html=True)
         else:
             for i, item in enumerate(bdata[:3]):
                 name      = item.get("bldNm") or item.get("platPlcNm") or f"건물 {i+1}"
@@ -342,57 +308,30 @@ with col_info:
                 height    = item.get("heit", "-")
                 approve   = item.get("useAprDay", "-")
                 fam_cnt   = item.get("hhldCnt", "-")
-
                 def fmt_area(v):
                     try: return f"{float(v):,.2f} ㎡"
                     except: return str(v)
-
                 def fmt_date(v):
                     s = str(v)
-                    return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s) == 8 else s
-
-                badge_cls = "badge-green"  if "주거" in use_nm else \
-                            "badge-orange" if any(k in use_nm for k in ["상업","근린"]) else \
-                            "badge-blue"
-
+                    return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s)==8 else s
+                badge_cls = "badge-green" if "주거" in use_nm else \
+                            "badge-orange" if any(k in use_nm for k in ["상업","근린"]) else "badge-blue"
                 fam_row = (f"<div class='data-row'><span class='data-label'>세대수</span>"
                            f"<span class='data-value'>{fam_cnt}세대</span></div>"
                            if fam_cnt and fam_cnt != "-" else "")
-
                 st.markdown(f"""
                 <div class="info-card">
                     <h3>🏗️ {name}</h3>
-                    <div class="data-row">
-                        <span class="data-label">주용도</span>
-                        <span class="data-value"><span class="badge {badge_cls}">{use_nm}</span></span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">구조</span>
-                        <span class="data-value">{struct}</span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">층수</span>
-                        <span class="data-value">지상 {floor_u}층 / 지하 {floor_d}층</span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">연면적</span>
-                        <span class="data-value">{fmt_area(area)}</span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">대지면적</span>
-                        <span class="data-value">{fmt_area(plat_area)}</span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">높이</span>
-                        <span class="data-value">{height} m</span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">사용승인일</span>
-                        <span class="data-value">{fmt_date(approve)}</span>
-                    </div>
+                    <div class="data-row"><span class="data-label">주용도</span>
+                        <span class="data-value"><span class="badge {badge_cls}">{use_nm}</span></span></div>
+                    <div class="data-row"><span class="data-label">구조</span><span class="data-value">{struct}</span></div>
+                    <div class="data-row"><span class="data-label">층수</span><span class="data-value">지상 {floor_u}층 / 지하 {floor_d}층</span></div>
+                    <div class="data-row"><span class="data-label">연면적</span><span class="data-value">{fmt_area(area)}</span></div>
+                    <div class="data-row"><span class="data-label">대지면적</span><span class="data-value">{fmt_area(plat_area)}</span></div>
+                    <div class="data-row"><span class="data-label">높이</span><span class="data-value">{height} m</span></div>
+                    <div class="data-row"><span class="data-label">사용승인일</span><span class="data-value">{fmt_date(approve)}</span></div>
                     {fam_row}
-                </div>
-                """, unsafe_allow_html=True)
+                </div>""", unsafe_allow_html=True)
 
         if st.button("🔄 초기화", use_container_width=True):
             st.session_state.addr_info     = None
