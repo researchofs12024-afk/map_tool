@@ -32,17 +32,24 @@ def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
     }
     try:
         resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        items = (
-            data.get("response", {})
-                .get("body", {})
-                .get("items", {})
-                .get("item", [])
-        )
-        if isinstance(items, dict):
-            items = [items]
-        return items
+        raw = resp.text  # 디버그용 원문 보존
+        try:
+            data = resp.json()
+        except Exception:
+            return {"error": f"JSON 파싱 실패: {raw[:300]}"}
+
+        body = data.get("response", {}).get("body", {})
+        total = body.get("totalCount", 0)
+        items = body.get("items", {})
+
+        if total == 0 or not items:
+            return {"empty": True, "params": params, "raw": raw[:500]}
+
+        item_list = items.get("item", [])
+        if isinstance(item_list, dict):
+            item_list = [item_list]
+        return item_list
+
     except Exception as e:
         return {"error": str(e)}
 
@@ -102,6 +109,11 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
     background:#fff3cd; border:1px solid #ffc107; border-radius:10px;
     padding:14px 18px; color:#856404; font-size:.88rem;
 }
+.debug-box {
+    background:#f0f4ff; border:1px solid #90caf9; border-radius:10px;
+    padding:14px 18px; color:#1a237e; font-size:.78rem;
+    font-family: monospace; word-break: break-all;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -115,17 +127,15 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── 좌표 입력 (숨김 처리된 st.text_input으로 JS → Python 값 전달) ────────────
 col_map, col_info = st.columns([6, 4], gap="medium")
 
 if "addr_info"     not in st.session_state: st.session_state.addr_info     = None
 if "building_data" not in st.session_state: st.session_state.building_data = None
 if "last_coord"    not in st.session_state: st.session_state.last_coord    = ""
+if "debug_info"    not in st.session_state: st.session_state.debug_info    = {}
 
-# JS에서 좌표를 넘길 숨겨진 입력창
 coord_input = st.text_input("coord", value="", key="coord_box", label_visibility="collapsed")
 
-# 좌표가 입력되면 API 호출
 if coord_input and coord_input != st.session_state.last_coord:
     st.session_state.last_coord = coord_input
     try:
@@ -136,6 +146,8 @@ if coord_input and coord_input != st.session_state.last_coord:
         addr_doc = get_address_from_coords(lat, lng)
         st.session_state.addr_info = addr_doc
 
+        debug = {"lat": lat, "lng": lng}
+
         if addr_doc and "error" not in addr_doc:
             jibun   = addr_doc.get("address", {})
             b_code  = jibun.get("b_code", "")
@@ -143,14 +155,27 @@ if coord_input and coord_input != st.session_state.last_coord:
             sub_no  = jibun.get("sub_address_no",  "0")
             sigungu_cd = b_code[:5]   if len(b_code) >= 5  else ""
             bjdong_cd  = b_code[5:10] if len(b_code) >= 10 else ""
+
+            debug["b_code"]     = b_code
+            debug["sigungu_cd"] = sigungu_cd
+            debug["bjdong_cd"]  = bjdong_cd
+            debug["main_no"]    = main_no
+            debug["sub_no"]     = sub_no
+
             if sigungu_cd and bjdong_cd:
-                st.session_state.building_data = get_building_info(
-                    sigungu_cd, bjdong_cd, main_no, sub_no
-                )
+                result = get_building_info(sigungu_cd, bjdong_cd, main_no, sub_no)
+                st.session_state.building_data = result
+                debug["api_result_type"] = str(type(result))
+                if isinstance(result, dict):
+                    debug["api_result"] = result
             else:
                 st.session_state.building_data = None
+                debug["error"] = "sigungu_cd 또는 bjdong_cd 없음"
         else:
             st.session_state.building_data = None
+
+        st.session_state.debug_info = debug
+
     except Exception as e:
         st.session_state.addr_info     = {"error": str(e)}
         st.session_state.building_data = None
@@ -211,29 +236,18 @@ MAP_HTML = """
         document.getElementById('status').innerHTML =
           '📍 위도: ' + lat.toFixed(5) + ' / 경도: ' + lng.toFixed(5);
 
-        // Streamlit의 숨겨진 text_input에 좌표값 입력 후 Enter 이벤트 발생
         var inputs = window.parent.document.querySelectorAll('input[type="text"]');
         for (var i = 0; i < inputs.length; i++) {
           var inp = inputs[i];
-          // aria-label 또는 data-testid로 우리 input 찾기
-          var nativeInput = Object.keys(inp).find(k => k.startsWith('__reactFiber'));
           var coord = lat.toFixed(7) + ',' + lng.toFixed(7);
-
           var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
             window.parent.HTMLInputElement.prototype, 'value'
           ).set;
           nativeInputValueSetter.call(inp, coord);
-
           inp.dispatchEvent(new inp.ownerDocument.defaultView.Event('input', { bubbles: true }));
-          inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keydown', {
-            key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true
-          }));
-          inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keypress', {
-            key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true
-          }));
-          inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keyup', {
-            key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true
-          }));
+          inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keydown',  { key:'Enter', keyCode:13, bubbles:true }));
+          inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keypress', { key:'Enter', keyCode:13, bubbles:true }));
+          inp.dispatchEvent(new inp.ownerDocument.defaultView.KeyboardEvent('keyup',    { key:'Enter', keyCode:13, bubbles:true }));
           break;
         }
       });
@@ -287,15 +301,34 @@ with col_info:
             </div>
             """, unsafe_allow_html=True)
 
+        # ── 디버그 정보 표시 (원인 파악용) ──
+        if st.session_state.debug_info:
+            d = st.session_state.debug_info
+            st.markdown(f"""
+            <div class="debug-box">
+                <b>🔍 디버그 정보</b><br>
+                b_code: {d.get('b_code','?')}<br>
+                sigungu_cd: {d.get('sigungu_cd','?')}<br>
+                bjdong_cd: {d.get('bjdong_cd','?')}<br>
+                main_no: {d.get('main_no','?')}<br>
+                sub_no: {d.get('sub_no','?')}<br>
+                결과 타입: {d.get('api_result_type','?')}<br>
+                API 결과: {str(d.get('api_result', ''))[:300]}
+            </div>
+            """, unsafe_allow_html=True)
+
         bdata = st.session_state.building_data
         if bdata is None:
             st.markdown('<div class="error-box">⚠️ 법정동 코드를 확인할 수 없습니다.</div>',
                         unsafe_allow_html=True)
         elif isinstance(bdata, dict) and "error" in bdata:
-            st.markdown(f'<div class="error-box">⚠️ 건축물대장 API 오류: {bdata["error"]}</div>',
+            st.markdown(f'<div class="error-box">⚠️ API 오류: {bdata.get("error","")}<br>응답: {str(bdata.get("raw",""))[:200]}</div>',
+                        unsafe_allow_html=True)
+        elif isinstance(bdata, dict) and bdata.get("empty"):
+            st.markdown(f'<div class="error-box">ℹ️ 건축물대장 없음<br>파라미터: {bdata.get("params",{})}<br>응답: {bdata.get("raw","")[:200]}</div>',
                         unsafe_allow_html=True)
         elif not bdata:
-            st.markdown('<div class="error-box">ℹ️ 해당 위치에 등록된 건축물대장 정보가 없습니다.</div>',
+            st.markdown('<div class="error-box">ℹ️ 건축물대장 정보가 없습니다.</div>',
                         unsafe_allow_html=True)
         else:
             for i, item in enumerate(bdata[:3]):
@@ -331,9 +364,7 @@ with col_info:
                     <h3>🏗️ {name}</h3>
                     <div class="data-row">
                         <span class="data-label">주용도</span>
-                        <span class="data-value">
-                            <span class="badge {badge_cls}">{use_nm}</span>
-                        </span>
+                        <span class="data-value"><span class="badge {badge_cls}">{use_nm}</span></span>
                     </div>
                     <div class="data-row">
                         <span class="data-label">구조</span>
@@ -367,4 +398,5 @@ with col_info:
             st.session_state.addr_info     = None
             st.session_state.building_data = None
             st.session_state.last_coord    = ""
+            st.session_state.debug_info    = {}
             st.rerun()
