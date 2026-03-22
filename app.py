@@ -43,66 +43,11 @@ def get_jibun_address(lat, lng):
         return {}
 
 
-def get_parcel_geometry(lat, lng):
-    d = 0.0004
-    url = "https://api.vworld.kr/req/wfs"
-    params = {
-        "SERVICE":  "WFS",
-        "VERSION":  "2.0.0",
-        "REQUEST":  "GetFeature",
-        "TYPENAME": "lt_c_lhpllnd",
-        "SRSNAME":  "EPSG:4326",
-        "BBOX":     f"{lng-d},{lat-d},{lng+d},{lat+d},EPSG:4326",
-        "OUTPUT":   "application/json",
-        "KEY":      VWORLD_KEY,
-    }
-    try:
-        resp = requests.get(url, params=params, timeout=8)
-        data = resp.json()
-        features = data.get("features", [])
-        if not features:
-            return None, f"features 없음 (status={resp.status_code})"
-        for f in features:
-            geom = f.get("geometry")
-            if geom and point_in_geometry(lng, lat, geom):
-                return geom, "OK"
-        return features[0].get("geometry"), "OK(fallback)"
-    except requests.exceptions.Timeout:
-        return None, "VWorld 타임아웃"
-    except requests.exceptions.ConnectionError as e:
-        return None, f"연결 오류: {str(e)[:80]}"
-    except Exception as e:
-        return None, f"오류: {str(e)[:80]}"
-
-
-def point_in_geometry(px, py, geom):
-    try:
-        rings = []
-        if geom["type"] == "Polygon":
-            rings = [geom["coordinates"][0]]
-        elif geom["type"] == "MultiPolygon":
-            rings = [g[0] for g in geom["coordinates"]]
-        for ring in rings:
-            inside = False
-            n = len(ring); j = n - 1
-            for i in range(n):
-                xi, yi = ring[i][0], ring[i][1]
-                xj, yj = ring[j][0], ring[j][1]
-                if ((yi > py) != (yj > py)) and (px < (xj-xi)*(py-yi)/(yj-yi+1e-15)+xi):
-                    inside = not inside
-                j = i
-            if inside:
-                return True
-    except Exception:
-        pass
-    return False
-
-
 def get_building_title(sigungu_cd, bjdong_cd, bun, ji):
     url = "http://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo"
     params = {
         "serviceKey": BUILDING_API_KEY,
-        "sigunguCd":  sigungu_cd, "bjdongCd": bjdong_cd,
+        "sigunguCd": sigungu_cd, "bjdongCd": bjdong_cd,
         "bun": str(bun).zfill(4), "ji": str(ji).zfill(4),
         "numOfRows": "10", "pageNo": "1", "_type": "json",
     }
@@ -120,7 +65,7 @@ def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
     url = "http://apis.data.go.kr/1613000/BldRgstHubService/getBrBasisOulnInfo"
     params = {
         "serviceKey": BUILDING_API_KEY,
-        "sigunguCd":  sigungu_cd, "bjdongCd": bjdong_cd,
+        "sigunguCd": sigungu_cd, "bjdongCd": bjdong_cd,
         "bun": str(bun).zfill(4), "ji": str(ji).zfill(4),
         "numOfRows": "10", "pageNo": "1", "_type": "json",
     }
@@ -148,8 +93,7 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
 .app-header p  { color:#8ecae6; margin:0; font-size:.9rem; }
 .info-card {
     background:#fff; border:1px solid #e8edf2; border-radius:14px;
-    padding:22px 26px; margin-bottom:16px;
-    box-shadow:0 2px 12px rgba(0,0,0,.06);
+    padding:22px 26px; margin-bottom:16px; box-shadow:0 2px 12px rgba(0,0,0,.06);
 }
 .info-card h3 {
     color:#1a2e3b; font-size:1rem; font-weight:700;
@@ -172,15 +116,7 @@ html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
     padding:30px 22px; text-align:center; color:#37474f; font-size:.9rem; line-height:1.9;
 }
 .hint-box .icon { font-size:2.4rem; margin-bottom:10px; }
-.error-box {
-    background:#fff3cd; border:1px solid #ffc107; border-radius:10px;
-    padding:14px 18px; color:#856404; font-size:.88rem;
-}
-.debug-box {
-    background:#fff8e1; border:1px solid #ffe082; border-radius:10px;
-    padding:12px 16px; color:#5d4037; font-size:.78rem;
-    font-family:monospace; word-break:break-all; margin-bottom:12px;
-}
+.error-box { background:#fff3cd; border:1px solid #ffc107; border-radius:10px; padding:14px 18px; color:#856404; font-size:.88rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -196,10 +132,9 @@ st.markdown("""
 
 col_map, col_info = st.columns([6, 4], gap="medium")
 
-for k, default in [("addr_info",None),("building_title",None),("building_basic",None),
-                    ("last_coord",""),("parcel_geom",None),("vworld_status","")]:
+for k, v in [("addr_info",None),("building_title",None),("building_basic",None),("last_coord","")]:
     if k not in st.session_state:
-        st.session_state[k] = default
+        st.session_state[k] = v
 
 coord_input = st.text_input("coord", value="", key="coord_box", label_visibility="collapsed")
 
@@ -209,12 +144,7 @@ if coord_input and coord_input != st.session_state.last_coord:
         lat, lng = map(float, coord_input.split(","))
         addr_doc = get_jibun_address(lat, lng)
         bjd_doc  = get_region_code(lat, lng)
-        geom, vworld_status = get_parcel_geometry(lat, lng)
-
-        st.session_state.addr_info      = addr_doc
-        st.session_state.parcel_geom    = geom
-        st.session_state.vworld_status  = vworld_status
-
+        st.session_state.addr_info = addr_doc
         if bjd_doc:
             b_code  = bjd_doc.get("code", "")
             jibun   = addr_doc.get("address", {}) if addr_doc else {}
@@ -225,11 +155,9 @@ if coord_input and coord_input != st.session_state.last_coord:
                 st.session_state.building_title = get_building_title(sc, bc, main_no, sub_no)
                 st.session_state.building_basic = get_building_info(sc, bc, main_no, sub_no)
     except Exception as e:
-        st.session_state.addr_info     = {"error": str(e)}
-        st.session_state.vworld_status = f"예외: {str(e)}"
+        st.session_state.addr_info = {"error": str(e)}
 
-parcel_json = json.dumps(st.session_state.parcel_geom) if st.session_state.parcel_geom else "null"
-
+# VWorld 키를 JS에 전달 (브라우저에서 직접 호출 + corsproxy.io 우회)
 MAP_HTML = f"""
 <!DOCTYPE html>
 <html>
@@ -243,10 +171,9 @@ MAP_HTML = f"""
           box-shadow:0 4px 20px rgba(0,0,0,.12); }}
   #status {{
     position:absolute; top:10px; left:50%; transform:translateX(-50%);
-    background:rgba(255,255,255,.95); border-radius:24px;
-    padding:8px 20px; font-size:13px; color:#37474f;
-    box-shadow:0 2px 12px rgba(0,0,0,.15); z-index:10;
-    backdrop-filter:blur(4px); white-space:nowrap;
+    background:rgba(255,255,255,.95); border-radius:24px; padding:8px 20px;
+    font-size:13px; color:#37474f; box-shadow:0 2px 12px rgba(0,0,0,.15);
+    z-index:10; backdrop-filter:blur(4px); white-space:nowrap;
   }}
   .wrapper {{ position:relative; }}
 </style>
@@ -257,7 +184,20 @@ MAP_HTML = f"""
   <div id="map"></div>
 </div>
 <script>
-var PARCEL_GEOM = {parcel_json};
+var VWORLD_KEY = '{VWORLD_KEY}';
+
+function point_in_polygon(px, py, coords) {{
+  var inside = false;
+  var n = coords.length, j = n - 1;
+  for (var i = 0; i < n; i++) {{
+    var xi = coords[i][0], yi = coords[i][1];
+    var xj = coords[j][0], yj = coords[j][1];
+    if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi))
+      inside = !inside;
+    j = i;
+  }}
+  return inside;
+}}
 
 (function() {{
   var script = document.createElement('script');
@@ -288,24 +228,65 @@ var PARCEL_GEOM = {parcel_json};
         document.getElementById('status').innerHTML = '🟧 필지 하이라이트 완료';
       }}
 
-      if (PARCEL_GEOM) drawPolygon(PARCEL_GEOM);
+      function fetchParcel(lat, lng) {{
+        var d   = 0.0005;
+        // corsproxy.io 를 통해 CORS 우회
+        var target = 'https://api.vworld.kr/req/wfs'
+          + '?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature'
+          + '&TYPENAME=lt_c_lhpllnd&SRSNAME=EPSG:4326'
+          + '&BBOX=' + (lng-d) + ',' + (lat-d) + ',' + (lng+d) + ',' + (lat+d) + ',EPSG:4326'
+          + '&OUTPUT=application/json'
+          + '&KEY=' + VWORLD_KEY;
+
+        var proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(target);
+
+        fetch(proxyUrl)
+          .then(function(r) {{ return r.json(); }})
+          .then(function(data) {{
+            var features = data.features || [];
+            if (!features.length) {{
+              document.getElementById('status').innerHTML = '⚠️ 필지 경계 없음';
+              return;
+            }}
+            // 클릭 좌표 포함 필지 선택
+            var best = null;
+            for (var i = 0; i < features.length; i++) {{
+              var geom = features[i].geometry;
+              if (!geom) continue;
+              var rings = geom.type === 'Polygon' ? [geom.coordinates[0]] : geom.coordinates.map(function(g){{return g[0];}});
+              for (var r = 0; r < rings.length; r++) {{
+                if (point_in_polygon(lng, lat, rings[r])) {{
+                  best = geom; break;
+                }}
+              }}
+              if (best) break;
+            }}
+            drawPolygon(best || features[0].geometry);
+          }})
+          .catch(function(e) {{
+            document.getElementById('status').innerHTML = '⚠️ 필지 조회 실패: ' + e.message;
+          }});
+      }}
 
       kakao.maps.event.addListener(map, 'click', function(e) {{
         var lat = e.latLng.getLat(), lng = e.latLng.getLng();
         if (marker) marker.setMap(null);
         marker = new kakao.maps.Marker({{ position: e.latLng, map: map }});
-        document.getElementById('status').innerHTML = '⏳ 조회 중...';
+        document.getElementById('status').innerHTML = '⏳ 필지 조회 중...';
 
+        // 필지 하이라이트 (브라우저 JS → corsproxy → VWorld)
+        fetchParcel(lat, lng);
+
+        // 건축물대장 (Streamlit Python)
         var inputs = window.parent.document.querySelectorAll('input[type="text"]');
         if (inputs.length > 0) {{
-          var inp    = inputs[0];
-          var coord  = lat.toFixed(7) + ',' + lng.toFixed(7);
+          var inp = inputs[0], coord = lat.toFixed(7) + ',' + lng.toFixed(7);
           var setter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
           setter.call(inp, coord);
           ['input','keydown','keypress','keyup'].forEach(function(t) {{
             inp.dispatchEvent(t.startsWith('key')
-              ? new inp.ownerDocument.defaultView.KeyboardEvent(t, {{ key:'Enter', keyCode:13, bubbles:true }})
-              : new inp.ownerDocument.defaultView.Event(t, {{ bubbles:true }}));
+              ? new inp.ownerDocument.defaultView.KeyboardEvent(t, {{key:'Enter',keyCode:13,bubbles:true}})
+              : new inp.ownerDocument.defaultView.Event(t, {{bubbles:true}}));
           }});
         }}
       }});
@@ -348,11 +329,6 @@ with col_info:
             </div>
         </div>""", unsafe_allow_html=True)
 
-        # VWorld 상태 디버그 표시
-        if st.session_state.vworld_status:
-            st.markdown(f'<div class="debug-box">🔍 VWorld 상태: {st.session_state.vworld_status}</div>',
-                        unsafe_allow_html=True)
-
         def fmt_area(v):
             try: return f"{float(v):,.2f} ㎡" if float(v) > 0 else "-"
             except: return "-"
@@ -364,7 +340,6 @@ with col_info:
             return s if s not in ["","0","None"] else "-"
 
         title_data = st.session_state.building_title
-
         if title_data and isinstance(title_data, list):
             for i, item in enumerate(title_data[:3]):
                 name     = (item.get("bldNm") or "").strip() or \
@@ -385,12 +360,9 @@ with col_info:
                 prkg     = val(item.get("indrAutoUtcnt"))
                 regstr   = val(item.get("regstrGbCdNm"))
                 kind     = val(item.get("regstrKindCdNm"))
-
-                badge_cls  = "badge-green"  if "주거" in use_nm else \
-                             "badge-orange" if any(k in use_nm for k in ["상업","근린","업무","판매"]) else \
-                             "badge-blue"
+                badge_cls  = "badge-green" if "주거" in use_nm else \
+                             "badge-orange" if any(k in use_nm for k in ["상업","근린","업무","판매"]) else "badge-blue"
                 kind_badge = f'<span class="badge badge-purple" style="font-size:.72rem">{regstr} · {kind}</span>' if regstr != "-" else ""
-
                 rows = [f"<div class='data-row'><span class='data-label'>주용도</span><span class='data-value'><span class='badge {badge_cls}'>{use_nm}</span></span></div>"]
                 for label, v in [("구조",struct),("지붕",roof)]:
                     if v != "-": rows.append(f"<div class='data-row'><span class='data-label'>{label}</span><span class='data-value'>{v}</span></div>")
@@ -402,17 +374,16 @@ with col_info:
                 if fam_cnt != "-": rows.append(f"<div class='data-row'><span class='data-label'>세대수</span><span class='data-value'>{fam_cnt}세대</span></div>")
                 if ho_cnt  != "-": rows.append(f"<div class='data-row'><span class='data-label'>호수</span><span class='data-value'>{ho_cnt}호</span></div>")
                 if prkg    != "-": rows.append(f"<div class='data-row'><span class='data-label'>옥내주차</span><span class='data-value'>{prkg}대</span></div>")
-
                 st.markdown(f"""
                 <div class="info-card">
                     <h3>🏗️ {name} {kind_badge}</h3>
                     {"".join(rows)}
                 </div>""", unsafe_allow_html=True)
         else:
-            st.markdown('<div class="error-box">ℹ️ 해당 위치에 등록된 건축물대장 정보가 없습니다.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="error-box">ℹ️ 건축물대장 정보가 없습니다.</div>', unsafe_allow_html=True)
 
         if st.button("🔄 초기화", use_container_width=True):
-            for k in ["addr_info","building_title","building_basic","parcel_geom","vworld_status"]:
+            for k in ["addr_info","building_title","building_basic"]:
                 st.session_state[k] = None
             st.session_state.last_coord = ""
             st.rerun()
