@@ -1,0 +1,10 @@
+# API 키 보호 - 반드시 포함!
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
