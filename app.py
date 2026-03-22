@@ -221,7 +221,45 @@ MAP_HTML = f"""
   #crosshair::after  {{ width:20px; height:2px; left:0; top:9px; }}
   .wrapper {{ position:relative; }}
 </style>
-<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_JS_KEY}&libraries=services"></script>
+<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_JS_KEY}&libraries=services&autoload=false"></script>
+<script>
+kakao.maps.load(function() {{
+    var container = document.getElementById('map');
+    var options   = {{ center: new kakao.maps.LatLng(37.5665, 126.9780), level: 4 }};
+    var map       = new kakao.maps.Map(container, options);
+    var geocoder  = new kakao.maps.services.Geocoder();
+    var marker    = null;
+
+    map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
+    map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
+
+    kakao.maps.event.addListener(map, 'click', function(mouseEvent) {{
+        var lat = mouseEvent.latLng.getLat();
+        var lng = mouseEvent.latLng.getLng();
+
+        if (marker) marker.setMap(null);
+        marker = new kakao.maps.Marker({{ position: mouseEvent.latLng, map: map }});
+
+        document.getElementById('status').innerHTML = '⏳ 주소를 조회 중입니다...';
+
+        window.parent.postMessage(
+            {{ type: 'MAP_CLICK', lat: lat, lng: lng }},
+            '*'
+        );
+
+        geocoder.coord2Address(lng, lat, function(result, status) {{
+            if (status === kakao.maps.services.Status.OK) {{
+                var addr = result[0].road_address
+                    ? result[0].road_address.address_name
+                    : result[0].address.address_name;
+                document.getElementById('status').innerHTML = '📍 ' + addr;
+            }} else {{
+                document.getElementById('status').innerHTML = '⚠️ 주소를 찾을 수 없습니다';
+            }}
+        }});
+    }});
+}});
+</script>
 </head>
 <body>
 <div class="wrapper">
