@@ -18,7 +18,7 @@ except Exception:
     KAKAO_JS_KEY     = "057a4a253017791fe6072d7b089a063a"
     KAKAO_REST_KEY   = "c5af33c0d1d6a654362d3fea152cc076"
     BUILDING_API_KEY = "9619e124e16b9e57bad6cfefdc82f6c87749176260b4caff32eda964aad5de1b"
-    VWORLD_KEY       = "D2A7A3D2-EBE4-339F-A5A7-3C32E6751F98"
+    VWORLD_KEY       = "F12043F0-86DF-3395-9004-27A377FD5FB6"
 
 
 def get_region_code(lat, lng):
