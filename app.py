@@ -219,91 +219,86 @@ if coord_input and coord_input != st.session_state.last_coord:
         st.session_state.parcel_status = f"예외: {e}"
 
 parcel_json = json.dumps(st.session_state.parcel_geom) if st.session_state.parcel_geom else "null"
-
-MAP_HTML = f"""
+# f-string 충돌을 피하기 위해 .replace를 사용합니다.
+MAP_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
 <style>
-  * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ background:#f8fafc; }}
-  #map {{ width:100%; height:500px; border-radius:12px; overflow:hidden;
-          box-shadow:0 4px 20px rgba(0,0,0,.12); }}
-  #status {{
-    position:absolute; top:10px; left:50%; transform:translateX(-50%);
-    background:rgba(255,255,255,.95); border-radius:24px; padding:8px 20px;
-    font-size:13px; color:#37474f; box-shadow:0 2px 12px rgba(0,0,0,.15);
-    z-index:10; backdrop-filter:blur(4px); white-space:nowrap;
-  }}
-  .wrapper {{ position:relative; }}
+  * { margin:0; padding:0; }
+  #map { width:100%; height:500px; border-radius:12px; }
+  #status { position:absolute; top:10px; left:50%; transform:translateX(-50%); background:white; padding:8px 20px; border-radius:24px; font-size:13px; z-index:10; box-shadow:0 2px 12px rgba(0,0,0,0.15); }
 </style>
 </head>
 <body>
-<div class="wrapper">
-  <div id="status">🖱️ 지도를 클릭하면 필지를 조회합니다</div>
-  <div id="map"></div>
-</div>
+<div id="status">🖱️ 지도를 클릭하면 필지를 조회합니다</div>
+<div id="map"></div>
 <script>
-var PARCEL_GEOM = {parcel_json};
-
-(function() {{
+(function() {
   var script = document.createElement('script');
-  script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_JS_KEY}&autoload=false';
-  script.onload = function() {{
-    kakao.maps.load(function() {{
-      var map = new kakao.maps.Map(document.getElementById('map'), {{
+  script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey=__KAKAO_KEY__&autoload=false';
+  script.onload = function() {
+    kakao.maps.load(function() {
+      var map = new kakao.maps.Map(document.getElementById('map'), {
         center: new kakao.maps.LatLng(37.5665, 126.9780), level: 3
-      }});
-      map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
-      map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
-
+      });
+      
       var polygon = null, marker = null;
 
-      function drawPolygon(geom) {{
-        if (polygon) polygon.setMap(null);
-        if (!geom) return;
-        var rings = geom.type === 'Polygon' ? geom.coordinates[0] : geom.coordinates[0][0];
-        var path  = rings.map(function(c) {{ return new kakao.maps.LatLng(c[1], c[0]); }});
-        var bounds = new kakao.maps.LatLngBounds();
-        path.forEach(function(p) {{ bounds.extend(p); }});
-        polygon = new kakao.maps.Polygon({{
-          map: map, path: path,
-          strokeWeight: 3, strokeColor: '#E53E3E', strokeOpacity: 1,
-          fillColor: '#FC8181', fillOpacity: 0.35,
-        }});
-        map.setBounds(bounds, 80);
-        document.getElementById('status').innerHTML = '🔴 필지 하이라이트 완료';
-      }}
+      // [방법 2 핵심] 브라우저(사용자 PC)에서 브이월드 데이터를 직접 가져와서 그리는 함수
+      function fetchAndDrawParcel(lat, lng) {
+        var vkey = "__VWORLD_KEY__";
+        var url = "https://api.vworld.kr/req/data?service=data&request=GetFeature&data=lp_pa_cbnd_bubun&key=" + vkey + 
+                  "&geomFilter=POINT(" + lng + " " + lat + ")&geometry=true&crs=EPSG:4326&domain=s1map-tool.streamlit.app";
+        
+        fetch(url)
+          .then(res => res.json())
+          .then(data => {
+            if (data.response && data.response.status === "OK") {
+              var geom = data.response.result.featureCollection.features[0].geometry;
+              
+              if (polygon) polygon.setMap(null); // 기존 하이라이트 삭제
+              
+              var rings = geom.type === 'Polygon' ? geom.coordinates[0] : geom.coordinates[0][0];
+              var path = rings.map(c => new kakao.maps.LatLng(c[1], c[0]));
+              
+              // 카카오맵 위에 폴리곤 그리기
+              polygon = new kakao.maps.Polygon({
+                map: map, path: path, strokeWeight: 3, strokeColor: '#FF0000', strokeOpacity: 0.8, fillColor: '#FF0000', fillOpacity: 0.2
+              });
+              
+              document.getElementById('status').innerHTML = '🔴 필지 하이라이트 완료';
+            }
+          }).catch(err => console.error(err));
+      }
 
-      if (PARCEL_GEOM) drawPolygon(PARCEL_GEOM);
-
-      kakao.maps.event.addListener(map, 'click', function(e) {{
+      kakao.maps.event.addListener(map, 'click', function(e) {
         var lat = e.latLng.getLat(), lng = e.latLng.getLng();
         if (marker) marker.setMap(null);
-        marker = new kakao.maps.Marker({{ position: e.latLng, map: map }});
-        document.getElementById('status').innerHTML = '⏳ 조회 중...';
+        marker = new kakao.maps.Marker({ position: e.latLng, map: map });
+        
+        // 1. 자바스크립트가 직접 브이월드 호출해서 하이라이트 그리기
+        fetchAndDrawParcel(lat, lng);
+
+        // 2. 원래 하던 대로 파이썬(Streamlit)에 좌표 전달
         var inputs = window.parent.document.querySelectorAll('input[type="text"]');
-        if (inputs.length > 0) {{
-          var inp = inputs[0], coord = lat.toFixed(7) + ',' + lng.toFixed(7);
+        if (inputs.length > 0) {
+          var inp = inputs[0];
           var setter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
-          setter.call(inp, coord);
-          ['input','keydown','keypress','keyup'].forEach(function(t) {{
-            inp.dispatchEvent(t.startsWith('key')
-              ? new inp.ownerDocument.defaultView.KeyboardEvent(t, {{key:'Enter',keyCode:13,bubbles:true}})
-              : new inp.ownerDocument.defaultView.Event(t, {{bubbles:true}}));
-          }});
-        }}
-      }});
-    }});
-  }};
+          setter.call(inp, lat.toFixed(7) + ',' + lng.toFixed(7));
+          inp.dispatchEvent(new Event('input', { bubbles: true }));
+          inp.dispatchEvent(new KeyboardEvent('keydown', { key:'Enter', keyCode:13, bubbles:true }));
+        }
+      });
+    });
+  };
   document.head.appendChild(script);
-}})();
+})();
 </script>
 </body>
 </html>
-"""
+""".replace("__KAKAO_KEY__", KAKAO_JS_KEY).replace("__VWORLD_KEY__", VWORLD_KEY.strip())
 
 with col_map:
     st.components.v1.html(MAP_HTML, height=520, scrolling=False)
