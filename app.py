@@ -42,36 +42,54 @@ def get_jibun_address(lat, lng):
     except Exception:
         return {}
 
-
 def get_parcel_polygon(lat, lng):
-    d = 0.0005
-    url = "https://api.vworld.kr/req/wfs"
+    # 1. API 키 공백 제거
+    clean_key = VWORLD_KEY.strip()
+    
+    # 2. Vworld Data API URL (WFS보다 안정적임)
+    url = "https://api.vworld.kr/req/data"
+    
+    # 3. 요청 파라미터
     params = {
-        "SERVICE":  "WFS",
-        "VERSION":  "2.0.0",
-        "REQUEST":  "GetFeature",
-        "TYPENAME": "lt_c_lhpllnd",
-        "SRSNAME":  "EPSG:4326",
-        "BBOX":     f"{lng-d},{lat-d},{lng+d},{lat+d},EPSG:4326",
-        "OUTPUT":   "application/json",
-        "KEY":      VWORLD_KEY,
+        "service": "data",
+        "request": "GetFeature",
+        "data": "lp_pa_cbnd_bubun", # 지적도 레이어
+        "key": clean_key,
+        "geomFilter": f"POINT({lng} {lat})",
+        "geometry": "true",
+        "attribute": "true",
+        "crs": "EPSG:4326",
+        "domain": "localhost"  # 혹은 실제 서비스 도메인
     }
+    
+    # 4. 중요: 헤더 추가 (이 부분이 없으면 RemoteDisconnected 발생 확률 높음)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Referer": "https://localhost" # Vworld에 등록한 도메인과 일치해야 함
+    }
+    
     try:
-        resp     = requests.get(url, params=params, timeout=10)
-        raw      = resp.text.strip()
-        if not raw or raw.startswith("<"):
-            return None, f"비정상응답(HTTP {resp.status_code}): {raw[:100]}"
-        data     = resp.json()
-        features = data.get("features", [])
-        if not features:
-            return None, "features 없음"
-        for f in features:
-            geom = f.get("geometry")
-            if geom and _point_in_geom(lng, lat, geom):
-                return geom, "OK"
-        return features[0].get("geometry"), "OK(fallback)"
+        # verify=False는 SSL 인증서 오류 방지용 (필요시 사용)
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        
+        # 응답 확인
+        if resp.status_code != 200:
+            return None, f"HTTP 에러: {resp.status_code}"
+            
+        data = resp.json()
+        
+        if data.get("response", {}).get("status") == "OK":
+            features = data["response"]["result"]["featureCollection"]["features"]
+            if features:
+                return features[0].get("geometry"), "OK"
+            else:
+                return None, "해당 좌표에 필지 정보가 없음"
+        else:
+            error_msg = data.get("response", {}).get("error", {}).get("text", "알 수 없는 오류")
+            return None, f"API 응답 오류: {error_msg}"
+            
     except Exception as e:
-        return None, f"오류: {str(e)[:100]}"
+        return None, f"연결 오류: {str(e)}"
 
 
 def _point_in_geom(px, py, geom):
