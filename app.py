@@ -9,13 +9,14 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# [1] API 키 및 설정
+# [1] API 키 설정
 try:
     KAKAO_JS_KEY     = st.secrets["KAKAO_JS_KEY"].strip()
     KAKAO_REST_KEY   = st.secrets["KAKAO_REST_KEY"].strip()
     BUILDING_API_KEY = st.secrets["BUILDING_API_KEY"].strip()
     VWORLD_KEY       = st.secrets["VWORLD_KEY"].strip()
 except:
+    # 기본값 (테스트용)
     KAKAO_JS_KEY     = "057a4a253017791fe6072d7b089a063a"
     KAKAO_REST_KEY   = "c5af33c0d1d6a654362d3fea152cc076"
     BUILDING_API_KEY = "9619e124e16b9e57bad6cfefdc82f6c87749176260b4caff32eda964aad5de1b"
@@ -23,14 +24,13 @@ except:
 
 MY_DOMAIN = "s1map-tool.streamlit.app"
 
-# [2] 파이썬 유틸리티 함수 (건축물대장 조회용)
+# [2] 건축물대장 및 주소 조회 함수 (기존 로직 유지)
 def get_region_code(lat, lng):
     url = "https://dapi.kakao.com/v2/local/geo/coord2regioncode.json"
     headers = {"Authorization": f"KakaoAK {KAKAO_REST_KEY}"}
     try:
         resp = requests.get(url, headers=headers, params={"x": lng, "y": lat}, timeout=5)
-        docs = resp.json().get("documents", [])
-        return next((d for d in docs if d.get("region_type") == "B"), None)
+        return next((d for d in resp.json().get("documents", []) if d.get("region_type") == "B"), None)
     except: return None
 
 def get_jibun_address(lat, lng):
@@ -38,8 +38,7 @@ def get_jibun_address(lat, lng):
     headers = {"Authorization": f"KakaoAK {KAKAO_REST_KEY}"}
     try:
         resp = requests.get(url, headers=headers, params={"x": lng, "y": lat}, timeout=5)
-        docs = resp.json().get("documents", [])
-        return docs[0] if docs else {}
+        return resp.json().get("documents", [{}])[0]
     except: return {}
 
 def get_building_title(sc, bc, bun, ji):
@@ -50,32 +49,28 @@ def get_building_title(sc, bc, bun, ji):
     }
     try:
         res = requests.get(url, params=params, timeout=5).json()
-        items = res.get("response", {}).get("body", {}).get("items", {})
-        if not items: return []
-        il = items.get("item", [])
-        return [il] if isinstance(il, dict) else il
+        items = res.get("response", {}).get("body", {}).get("items", {}).get("item", [])
+        return [items] if isinstance(items, dict) else items
     except: return []
 
-# [3] UI 레이아웃
+# [3] UI 디자인
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap');
 html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
-.app-header { background: linear-gradient(135deg, #0f2027 0%, #2c5364 100%); border-radius: 16px; padding: 25px; margin-bottom: 20px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
-.info-card { background:#fff; border:1px solid #e8edf2; border-radius:12px; padding:20px; margin-bottom:15px; box-shadow:0 2px 8px rgba(0,0,0,0.05); }
-.data-row { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px dashed #eee; font-size:14px; }
-.badge { background:#e3f2fd; color:#1565c0; padding:2px 8px; border-radius:10px; font-weight:bold; }
+.app-header { background: linear-gradient(135deg, #0f2027 0%, #2c5364 100%); border-radius: 15px; padding: 25px; color: white; margin-bottom: 20px; }
+.info-card { background: white; border-radius: 12px; padding: 20px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+.data-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed #eee; font-size: 14px; }
 </style>
+<div class="app-header"><h1>🏢 건축물대장 & 지적도 서비스</h1><p>지도를 클릭하면 필지 경계가 붉게 표시됩니다.</p></div>
 """, unsafe_allow_html=True)
-
-st.markdown('<div class="app-header"><h1>🏢 건축물대장 및 지적도 서비스</h1><p>지도를 클릭하면 해당 필지가 빨갛게 하이라이트됩니다.</p></div>', unsafe_allow_html=True)
 
 col_map, col_info = st.columns([6, 4])
 
 if "addr_info" not in st.session_state: st.session_state.addr_info = None
 if "building_title" not in st.session_state: st.session_state.building_title = None
 
-# Streamlit의 Hidden Input (JS와 통신용)
+# Hidden Input for JS communication
 coord_input = st.text_input("coord", value="", key="coord_box", label_visibility="collapsed")
 
 if coord_input:
@@ -87,7 +82,7 @@ if coord_input:
         jb = st.session_state.addr_info.get("address", {})
         st.session_state.building_title = get_building_title(code[:5], code[5:10], jb.get("main_address_no", "0"), jb.get("sub_address_no", "0"))
 
-# [4] 지도 HTML (f-string 충돌 방지를 위해 .replace 방식 사용)
+# [4] 지도 HTML 템플릿 (f-string을 쓰지 않아 안전함)
 MAP_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -95,17 +90,17 @@ MAP_HTML_TEMPLATE = """
     <meta charset="utf-8">
     <style>
         * { margin:0; padding:0; }
-        #map { width:100%; height:520px; border-radius:12px; }
+        #map { width:100%; height:520px; border-radius:12px; background: #f0f0f0; }
         #status { position:absolute; top:10px; left:50%; transform:translateX(-50%); background:white; padding:8px 15px; border-radius:20px; z-index:10; font-size:12px; box-shadow:0 2px 10px rgba(0,0,0,0.1); font-weight:bold; }
     </style>
 </head>
 <body>
     <div id="status">🖱️ 지도를 클릭해 보세요</div>
     <div id="map"></div>
-    <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=KAKAO_JS_KEY&autoload=false"></script>
+    <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=__KAKAO_KEY__&autoload=false"></script>
     <script>
-    var VWORLD_KEY = "VWORLD_KEY_VAL";
-    var DOMAIN = "MY_DOMAIN_VAL";
+    var VWORLD_KEY = "__VWORLD_KEY__";
+    var DOMAIN = "__DOMAIN__";
 
     kakao.maps.load(function() {
         var container = document.getElementById('map');
@@ -139,7 +134,7 @@ MAP_HTML_TEMPLATE = """
                     if (data.response && data.response.status === "OK") {
                         drawPolygon(data.response.result.featureCollection.features[0].geometry);
                     } else {
-                        document.getElementById('status').innerHTML = '⚠️ 필지 정보 없음';
+                        document.getElementById('status').innerHTML = '⚠️ 지적도 정보 없음';
                     }
                 }).catch(function(e) { console.error(e); });
         }
@@ -169,10 +164,10 @@ MAP_HTML_TEMPLATE = """
 </html>
 """
 
-# HTML 템플릿에 값 주입 (f-string 충돌 방지 핵심)
-final_html = MAP_HTML_TEMPLATE.replace("KAKAO_JS_KEY", KAKAO_JS_KEY)\
-                             .replace("VWORLD_KEY_VAL", VWORLD_KEY)\
-                             .replace("MY_DOMAIN_VAL", MY_DOMAIN)
+# HTML 데이터 주입 (f-string 우회)
+final_html = MAP_HTML_TEMPLATE.replace("__KAKAO_KEY__", KAKAO_JS_KEY)\
+                             .replace("__VWORLD_KEY__", VWORLD_KEY)\
+                             .replace("__DOMAIN__", MY_DOMAIN)
 
 with col_map:
     st.components.v1.html(final_html, height=540)
@@ -182,8 +177,8 @@ with col_info:
         addr = st.session_state.addr_info
         st.markdown(f"""
         <div class="info-card">
-            <h3>📍 주소 정보</h3>
-            <div class="data-row"><span>지번</span><span>{addr.get('address',{}).get('address_name','-')}</span></div>
+            <h3>📍 선택된 위치</h3>
+            <div class="data-row"><span>지번 주소</span><span>{addr.get('address',{}).get('address_name','-')}</span></div>
         </div>
         """, unsafe_allow_html=True)
         
@@ -193,12 +188,9 @@ with col_info:
                 st.markdown(f"""
                 <div class="info-card">
                     <h3 style="color:#1565c0;">🏗️ {item.get('bldNm') or '건물'}</h3>
-                    <div class="data-row"><span>주용도</span><span class="badge">{item.get('mainPurpsCdNm')}</span></div>
+                    <div class="data-row"><span>주용도</span><b>{item.get('mainPurpsCdNm')}</b></div>
                     <div class="data-row"><span>연면적</span><span>{item.get('totArea')} ㎡</span></div>
-                    <div class="data-row"><span>승인일</span><span>{item.get('useAprDay')}</span></div>
                 </div>
                 """, unsafe_allow_html=True)
-        else:
-            st.info("건축물대장 정보가 없습니다.")
     else:
         st.write("지도를 클릭해 주세요.")
