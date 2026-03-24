@@ -65,7 +65,7 @@ def get_parcel_polygon(lat, lng):
     # 4. 중요: 헤더 추가 (이 부분이 없으면 RemoteDisconnected 발생 확률 높음)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-        "Referer": "https://localhost" # Vworld에 등록한 도메인과 일치해야 함
+        "Referer": "https://s1map-tool.streamlit.app" # Vworld에 등록한 도메인과 일치해야 함
     }
     
     try:
