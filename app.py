@@ -41,57 +41,66 @@ def get_jibun_address(lat, lng):
         return docs[0] if docs else {}
     except Exception:
         return {}
-
 def get_parcel_polygon(lat, lng):
-    # 1. API 키 공백 제거
+    # 1. 키 공백 제거
     clean_key = VWORLD_KEY.strip()
     
-    # 2. Vworld Data API URL (WFS보다 안정적임)
+    # 2. 사용자님의 실제 서비스 도메인 설정 (매우 중요)
+    # Vworld 관리자 페이지에 등록된 도메인과 정확히 일치해야 함
+    my_domain = "s1map-tool.streamlit.app"
+    
+    # 3. Vworld Data API (GetFeature) 사용
     url = "https://api.vworld.kr/req/data"
     
-    # 3. 요청 파라미터
     params = {
         "service": "data",
         "request": "GetFeature",
-        "data": "lp_pa_cbnd_bubun", # 지적도 레이어
+        "data": "LP_PA_CBND_BUBUN",  # 지적도 레이어
         "key": clean_key,
         "geomFilter": f"POINT({lng} {lat})",
         "geometry": "true",
         "attribute": "true",
         "crs": "EPSG:4326",
-        "domain": "localhost"  # 혹은 실제 서비스 도메인
+        "domain": my_domain,        # 파라미터에 도메인 명시
+        "format": "json"
     }
     
-    # 4. 중요: 헤더 추가 (이 부분이 없으면 RemoteDisconnected 발생 확률 높음)
+    # 4. 헤더에 Referer와 User-Agent 추가 (RemoteDisconnected 해결 핵심)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-        "Referer": "https://s1map-tool.streamlit.app" # Vworld에 등록한 도메인과 일치해야 함
+        "Referer": f"https://{my_domain}" # 실제 접속 주소와 일치시킴
     }
     
     try:
-        # verify=False는 SSL 인증서 오류 방지용 (필요시 사용)
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        # timeout을 넉넉히 주어 서버 응답 대기
+        resp = requests.get(url, params=params, headers=headers, timeout=15)
         
-        # 응답 확인
+        # 만약 502 에러나 응답 없음이 발생할 경우를 대비한 체크
         if resp.status_code != 200:
-            return None, f"HTTP 에러: {resp.status_code}"
+            return None, f"Vworld 서버 에러: HTTP {resp.status_code}"
             
         data = resp.json()
         
-        if data.get("response", {}).get("status") == "OK":
+        # Vworld 응답 상태 확인
+        status = data.get("response", {}).get("status")
+        
+        if status == "OK":
             features = data["response"]["result"]["featureCollection"]["features"]
             if features:
+                # 성공: 필지 경계 데이터 반환
                 return features[0].get("geometry"), "OK"
             else:
-                return None, "해당 좌표에 필지 정보가 없음"
+                return None, "해당 좌표에 필지 데이터가 없습니다."
+        elif status == "NOT_FOUND":
+            return None, "필지를 찾을 수 없습니다."
         else:
-            error_msg = data.get("response", {}).get("error", {}).get("text", "알 수 없는 오류")
-            return None, f"API 응답 오류: {error_msg}"
+            error_msg = data.get("response", {}).get("error", {}).get("text", "인증 실패 또는 설정 오류")
+            return None, f"API 오류: {error_msg}"
             
     except Exception as e:
+        # 연결 끊김(RemoteDisconnected) 등의 예외 발생 시 메시지 출력
         return None, f"연결 오류: {str(e)}"
-
-
+        
 def _point_in_geom(px, py, geom):
     try:
         rings = [geom["coordinates"][0]] if geom["type"] == "Polygon" \
