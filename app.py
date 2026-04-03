@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import json
 
@@ -18,7 +19,17 @@ except Exception:
     KAKAO_REST_KEY   = "c5af33c0d1d6a654362d3fea152cc076"
     BUILDING_API_KEY = "9619e124e16b9e57bad6cfefdc82f6c87749176260b4caff32eda964aad5de1b"
 
+# -------------------------------
+# 1️⃣ 로컬 GeoJSON 불러오기
+# -------------------------------
+with open("서울중구.geojson", "r", encoding="utf-8") as f:
+    geojson_data = json.load(f)
+geojson_str = json.dumps(geojson_data)
 
+
+# -------------------------------
+# 2️⃣ 카카오 REST / 건축물대장 API
+# -------------------------------
 def get_region_code(lat, lng):
     url = "https://dapi.kakao.com/v2/local/geo/coord2regioncode.json"
     headers = {"Authorization": f"KakaoAK {KAKAO_REST_KEY}"}
@@ -77,6 +88,9 @@ def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
         return []
 
 
+# -------------------------------
+# 3️⃣ CSS
+# -------------------------------
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
@@ -124,17 +138,20 @@ st.markdown("""
     <div style="font-size:2.4rem">🏢</div>
     <div>
         <h1>건축물대장 조회 서비스</h1>
-        <p>클릭한 필지의 건축물대장 정보를 즉시 조회합니다</p>
+        <p>클릭한 필지가 하이라이트되고 건축물대장 정보를 즉시 조회합니다</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-col_map, col_info = st.columns([6, 4], gap="medium")
 
+# -------------------------------
+# 4️⃣ Session state 초기화
+# -------------------------------
 for k, v in [("addr_info", None), ("building_title", None), ("building_basic", None), ("last_coord", "")]:
     if k not in st.session_state:
         st.session_state[k] = v
 
+# 숨겨진 좌표 입력창 (지도 클릭 → Streamlit 통신용)
 coord_input = st.text_input("coord", value="", key="coord_box", label_visibility="collapsed")
 
 if coord_input and coord_input != st.session_state.last_coord:
@@ -158,82 +175,120 @@ if coord_input and coord_input != st.session_state.last_coord:
     except Exception as e:
         st.session_state.addr_info = {"error": str(e)}
 
-MAP_HTML = f"""
+
+# -------------------------------
+# 5️⃣ 레이아웃
+# -------------------------------
+col_map, col_info = st.columns([6, 4], gap="medium")
+
+# ── 지도 ──
+html_code = f"""
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
-<style>
-  * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ background:#f8fafc; }}
-  #map {{ width:100%; height:500px; border-radius:12px; overflow:hidden;
-          box-shadow:0 4px 20px rgba(0,0,0,.12); }}
-  #status {{
-    position:absolute; top:10px; left:50%; transform:translateX(-50%);
-    background:rgba(255,255,255,.95); border-radius:24px; padding:8px 20px;
-    font-size:13px; color:#37474f; box-shadow:0 2px 12px rgba(0,0,0,.15);
-    z-index:10; backdrop-filter:blur(4px); white-space:nowrap;
-  }}
-  .wrapper {{ position:relative; }}
-</style>
+<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_JS_KEY}&autoload=false"></script>
 </head>
-<body>
-<div class="wrapper">
-  <div id="status">🖱️ 지도를 클릭하면 필지를 조회합니다</div>
-  <div id="map"></div>
-</div>
+<body style="margin:0;padding:0;background:#f8fafc;">
+<div id="map" style="width:100%;height:520px;border-radius:12px;overflow:hidden;
+     box-shadow:0 4px 20px rgba(0,0,0,.12);"></div>
 <script>
-(function() {{
-  var script = document.createElement('script');
-  script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_JS_KEY}&autoload=false';
-  script.onload = function() {{
-    kakao.maps.load(function() {{
-      var map = new kakao.maps.Map(document.getElementById('map'), {{
-        center: new kakao.maps.LatLng(37.5665, 126.9780), level: 3
-      }});
-      map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
-      map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
+var geojson = {geojson_str};
 
-      var marker = null;
-
-      kakao.maps.event.addListener(map, 'click', function(e) {{
-        var lat = e.latLng.getLat(), lng = e.latLng.getLng();
-        if (marker) marker.setMap(null);
-        marker = new kakao.maps.Marker({{ position: e.latLng, map: map }});
-        document.getElementById('status').innerHTML = '⏳ 조회 중...';
-        var inputs = window.parent.document.querySelectorAll('input[type="text"]');
-        if (inputs.length > 0) {{
-          var inp = inputs[0], coord = lat.toFixed(7) + ',' + lng.toFixed(7);
-          var setter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
-          setter.call(inp, coord);
-          ['input','keydown','keypress','keyup'].forEach(function(t) {{
-            inp.dispatchEvent(t.startsWith('key')
-              ? new inp.ownerDocument.defaultView.KeyboardEvent(t, {{key:'Enter',keyCode:13,bubbles:true}})
-              : new inp.ownerDocument.defaultView.Event(t, {{bubbles:true}}));
-          }});
-          document.getElementById('status').innerHTML = '✅ 조회 완료';
-        }}
-      }});
+kakao.maps.load(function() {{
+    var map = new kakao.maps.Map(document.getElementById('map'), {{
+        center: new kakao.maps.LatLng(37.5636, 126.9976),
+        level: 4
     }});
-  }};
-  document.head.appendChild(script);
-}})();
+    map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
+    map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
+
+    var selectedPolygon = null;
+
+    function pointInPolygon(point, vs) {{
+        var x = point[0], y = point[1];
+        var inside = false;
+        for (var i = 0, j = vs.length - 1; i < vs.length; j = i++) {{
+            var xi = vs[i][0], yi = vs[i][1];
+            var xj = vs[j][0], yj = vs[j][1];
+            var intersect = ((yi > y) != (yj > y))
+                && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+            if (intersect) inside = !inside;
+        }}
+        return inside;
+    }}
+
+    function sendCoordToStreamlit(lat, lng) {{
+        var inputs = window.parent.document.querySelectorAll('input[type="text"]');
+        if (!inputs.length) return;
+        var inp    = inputs[0];
+        var coord  = lat.toFixed(7) + ',' + lng.toFixed(7);
+        var setter = Object.getOwnPropertyDescriptor(
+            window.parent.HTMLInputElement.prototype, 'value'
+        ).set;
+        setter.call(inp, coord);
+        ['input','keydown','keypress','keyup'].forEach(function(t) {{
+            inp.dispatchEvent(
+                t.startsWith('key')
+                    ? new inp.ownerDocument.defaultView.KeyboardEvent(t, {{key:'Enter', keyCode:13, bubbles:true}})
+                    : new inp.ownerDocument.defaultView.Event(t, {{bubbles:true}})
+            );
+        }});
+    }}
+
+    kakao.maps.event.addListener(map, 'click', function(mouseEvent) {{
+        var lat = mouseEvent.latLng.getLat();
+        var lng = mouseEvent.latLng.getLng();
+
+        if (selectedPolygon) {{
+            selectedPolygon.setMap(null);
+        }}
+
+        for (var f of geojson.features) {{
+            var coords = f.geometry.coordinates;
+            for (var polygonSet of coords) {{
+                for (var ring of polygonSet) {{
+                    if (pointInPolygon([lng, lat], ring)) {{
+                        var path = ring.map(coord =>
+                            new kakao.maps.LatLng(coord[1], coord[0])
+                        );
+                        selectedPolygon = new kakao.maps.Polygon({{
+                            path: path,
+                            strokeWeight: 2,
+                            strokeColor: '#FF0000',
+                            fillColor: '#FF0000',
+                            fillOpacity: 0.3
+                        }});
+                        selectedPolygon.setMap(map);
+                        sendCoordToStreamlit(lat, lng);
+                        return;
+                    }}
+                }}
+            }}
+        }}
+
+        // GeoJSON 범위 밖이어도 건축물대장 조회는 실행
+        sendCoordToStreamlit(lat, lng);
+    }});
+}});
 </script>
 </body>
 </html>
 """
 
 with col_map:
-    st.components.v1.html(MAP_HTML, height=520, scrolling=False)
+    components.html(html_code, height=540, scrolling=False)
 
+
+# ── 정보 패널 ──
 with col_info:
     if st.session_state.addr_info is None:
         st.markdown("""
         <div class="hint-box">
             <div class="icon">🗺️</div>
             <strong>지도를 클릭해 필지를 선택하세요</strong><br>
-            클릭한 위치의<br>
+            클릭한 필지가 <span style="color:#E53E3E;font-weight:700">붉은색</span>으로 하이라이트되고<br>
             건축물대장 정보가 표시됩니다
         </div>""", unsafe_allow_html=True)
     else:
@@ -267,34 +322,34 @@ with col_info:
         title_data = st.session_state.building_title
         if title_data and isinstance(title_data, list):
             for i, item in enumerate(title_data[:3]):
-                name     = (item.get("bldNm") or "").strip() or \
-                           (item.get("splotNm") or "").strip() or \
-                           (item.get("newPlatPlc") or item.get("platPlc") or f"건물 {i+1}")
-                use_nm   = val(item.get("mainPurpsCdNm"))
-                struct   = val(item.get("strctCdNm"))
-                roof     = val(item.get("roofCdNm"))
-                floor_u  = val(item.get("grndFlrCnt"))
-                floor_d  = val(item.get("ugrndFlrCnt"))
-                area     = fmt_area(item.get("totArea"))
-                plat_area= fmt_area(item.get("platArea"))
-                bc_area  = fmt_area(item.get("archArea"))
-                height   = val(item.get("heit"))
-                approve  = fmt_date(item.get("useAprDay"))
-                fam_cnt  = val(item.get("hhldCnt"))
-                ho_cnt   = val(item.get("hoCnt"))
-                prkg     = val(item.get("indrAutoUtcnt"))
-                regstr   = val(item.get("regstrGbCdNm"))
-                kind     = val(item.get("regstrKindCdNm"))
+                name      = (item.get("bldNm") or "").strip() or \
+                            (item.get("splotNm") or "").strip() or \
+                            (item.get("newPlatPlc") or item.get("platPlc") or f"건물 {i+1}")
+                use_nm    = val(item.get("mainPurpsCdNm"))
+                struct    = val(item.get("strctCdNm"))
+                roof      = val(item.get("roofCdNm"))
+                floor_u   = val(item.get("grndFlrCnt"))
+                floor_d   = val(item.get("ugrndFlrCnt"))
+                area      = fmt_area(item.get("totArea"))
+                plat_area = fmt_area(item.get("platArea"))
+                bc_area   = fmt_area(item.get("archArea"))
+                height    = val(item.get("heit"))
+                approve   = fmt_date(item.get("useAprDay"))
+                fam_cnt   = val(item.get("hhldCnt"))
+                ho_cnt    = val(item.get("hoCnt"))
+                prkg      = val(item.get("indrAutoUtcnt"))
+                regstr    = val(item.get("regstrGbCdNm"))
+                kind      = val(item.get("regstrKindCdNm"))
 
                 badge_cls  = "badge-green" if "주거" in use_nm else \
                              "badge-orange" if any(k in use_nm for k in ["상업","근린","업무","판매"]) else "badge-blue"
                 kind_badge = f'<span class="badge badge-purple" style="font-size:.72rem">{regstr} · {kind}</span>' if regstr != "-" else ""
 
                 rows = [f"<div class='data-row'><span class='data-label'>주용도</span><span class='data-value'><span class='badge {badge_cls}'>{use_nm}</span></span></div>"]
-                for label, v in [("구조",struct),("지붕",roof)]:
+                for label, v in [("구조", struct), ("지붕", roof)]:
                     if v != "-": rows.append(f"<div class='data-row'><span class='data-label'>{label}</span><span class='data-value'>{v}</span></div>")
                 rows.append(f"<div class='data-row'><span class='data-label'>층수</span><span class='data-value'>지상 {floor_u}층 / 지하 {floor_d}층</span></div>")
-                for label, v in [("연면적",area),("건축면적",bc_area),("대지면적",plat_area)]:
+                for label, v in [("연면적", area), ("건축면적", bc_area), ("대지면적", plat_area)]:
                     if v != "-": rows.append(f"<div class='data-row'><span class='data-label'>{label}</span><span class='data-value'>{v}</span></div>")
                 if height  != "-": rows.append(f"<div class='data-row'><span class='data-label'>높이</span><span class='data-value'>{height} m</span></div>")
                 if approve != "-": rows.append(f"<div class='data-row'><span class='data-label'>사용승인일</span><span class='data-value'>{approve}</span></div>")
@@ -311,7 +366,7 @@ with col_info:
             st.markdown('<div class="error-box">ℹ️ 건축물대장 정보가 없습니다.</div>', unsafe_allow_html=True)
 
         if st.button("🔄 초기화", use_container_width=True):
-            for k in ["addr_info","building_title","building_basic"]:
+            for k in ["addr_info", "building_title", "building_basic"]:
                 st.session_state[k] = None
             st.session_state.last_coord = ""
             st.rerun()
