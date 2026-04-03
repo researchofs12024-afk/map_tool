@@ -20,11 +20,24 @@ except Exception:
     BUILDING_API_KEY = "9619e124e16b9e57bad6cfefdc82f6c87749176260b4caff32eda964aad5de1b"
 
 # -------------------------------
-# 1️⃣ 로컬 GeoJSON 불러오기
+# 1️⃣ 로컬 GeoJSON 불러오기 (구별 동적 로드)
 # -------------------------------
-with open("서울중구.geojson", "r", encoding="utf-8") as f:
-    geojson_data = json.load(f)
-geojson_str = json.dumps(geojson_data)
+# 업로드된 구 파일 목록 — 추가할 때 여기에만 추가하면 됨
+GEOJSON_FILES = {
+    "중구": "서울중구.geojson",
+    "종로구": "서울종로구.geojson",
+}
+
+@st.cache_data(show_spinner=False)
+def load_geojson(gu_name):
+    filename = GEOJSON_FILES.get(gu_name)
+    if not filename:
+        return None
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 # -------------------------------
@@ -147,7 +160,8 @@ st.markdown("""
 # -------------------------------
 # 4️⃣ Session state 초기화
 # -------------------------------
-for k, v in [("addr_info", None), ("building_title", None), ("building_basic", None), ("last_coord", "")]:
+for k, v in [("addr_info", None), ("building_title", None), ("building_basic", None),
+             ("last_coord", ""), ("geojson_str", "null")]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -164,6 +178,11 @@ if coord_input and coord_input != st.session_state.last_coord:
         st.session_state.addr_info = addr_doc
 
         if bjd_doc:
+            # 구 이름으로 해당 GeoJSON 로드
+            gu_name = bjd_doc.get("region_2depth_name", "")
+            geojson_data = load_geojson(gu_name)
+            st.session_state.geojson_str = json.dumps(geojson_data) if geojson_data else "null"
+
             b_code  = bjd_doc.get("code", "")
             jibun   = addr_doc.get("address", {}) if addr_doc else {}
             main_no = jibun.get("main_address_no", "0") or "0"
@@ -194,7 +213,7 @@ html_code = f"""
 <div id="map" style="width:100%;height:520px;border-radius:12px;overflow:hidden;
      box-shadow:0 4px 20px rgba(0,0,0,.12);"></div>
 <script>
-var geojson = {geojson_str};
+var geojson = {st.session_state.geojson_str};
 
 kakao.maps.load(function() {{
     var map = new kakao.maps.Map(document.getElementById('map'), {{
@@ -369,4 +388,5 @@ with col_info:
             for k in ["addr_info", "building_title", "building_basic"]:
                 st.session_state[k] = None
             st.session_state.last_coord = ""
+            st.session_state.geojson_str = "null"
             st.rerun()
