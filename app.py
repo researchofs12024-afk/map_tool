@@ -44,30 +44,44 @@ def get_jibun_address(lat, lng):
 
 # [수정됨] 하이라이트를 위해 Vworld 호출 로직을 안정적인 방식으로 변경
 def get_parcel_polygon(lat, lng):
-    # 1. API 키 공백 제거
-    clean_key = VWORLD_KEY.strip()
-    
-    # 2. 가장 안정적인 Data API(GetFeature) 사용
-    v_key = VWORLD_KEY.strip()
-    # WFS 대신 더 안정적인 GetFeature(Data API) 방식 사용
-url = "https://api.vworld.kr/req/data"
-    
-params = {
-"service": "data",
-"request": "GetFeature",
-        "data": "lp_pa_cbnd_bubun", # 지적도 레이어
-        "key": clean_key,
+    url = "https://api.vworld.kr/req/data"
+
+    params = {
+        "service": "data",
+        "request": "GetFeature",
+        "data": "lp_pa_cbnd_bubun",
+        "key": VWORLD_KEY.strip(),
         "geomFilter": f"POINT({lng} {lat})",
-        "data": "lp_pa_cbnd_bubun", # 일반 지적도 레이어 (중요)
-        "key": v_key,
-        "geomFilter": f"POINT({lng} {lat})", # 클릭한 지점의 필지를 바로 찾음
-"geometry": "true",
+        "geometry": "true",
         "attribute": "true",
-"crs": "EPSG:4326",
-        "domain": "s1map-tool.streamlit.app" # 등록된 실제 도메인
+        "crs": "EPSG:4326",
         "domain": "s1map-tool.streamlit.app"
-}
-    
+    }
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://s1map-tool.streamlit.app"
+    }
+
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+
+        if resp.status_code != 200:
+            return None, f"서버 응답 에러: {resp.status_code}"
+
+        data = resp.json()
+
+        if data.get("response", {}).get("status") == "OK":
+            features = data["response"]["result"]["featureCollection"]["features"]
+            if features:
+                return features[0].get("geometry"), "OK"
+            else:
+                return None, "필지 없음"
+
+        return None, f"API 오류: {data}"
+
+    except Exception as e:
+        return None, f"연결 오류: {str(e)}"    
     # 3. 중요: 브이월드 방화벽을 통과하기 위한 헤더 (User-Agent와 Referer 필수)
     # [핵심] 차단(RemoteDisconnected)을 막기 위한 헤더
 headers = {
