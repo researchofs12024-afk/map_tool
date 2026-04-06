@@ -22,7 +22,6 @@ except Exception:
 # -------------------------------
 # 1️⃣ 로컬 GeoJSON 불러오기 (구별 동적 로드)
 # -------------------------------
-# 업로드된 구 파일 목록 — 추가할 때 여기에만 추가하면 됨
 GEOJSON_FILES = {
     "중구": "서울중구.geojson",
     "종로구": "서울종로구.geojson",
@@ -178,7 +177,6 @@ if coord_input and coord_input != st.session_state.last_coord:
         st.session_state.addr_info = addr_doc
 
         if bjd_doc:
-            # 구 이름으로 해당 GeoJSON 로드
             gu_name = bjd_doc.get("region_2depth_name", "")
             geojson_data = load_geojson(gu_name)
             st.session_state.geojson_str = json.dumps(geojson_data) if geojson_data else "null"
@@ -264,24 +262,27 @@ kakao.maps.load(function() {{
             selectedPolygon.setMap(null);
         }}
 
-        for (var f of geojson.features) {{
-            var coords = f.geometry.coordinates;
-            for (var polygonSet of coords) {{
-                for (var ring of polygonSet) {{
-                    if (pointInPolygon([lng, lat], ring)) {{
-                        var path = ring.map(coord =>
-                            new kakao.maps.LatLng(coord[1], coord[0])
-                        );
-                        selectedPolygon = new kakao.maps.Polygon({{
-                            path: path,
-                            strokeWeight: 2,
-                            strokeColor: '#FF0000',
-                            fillColor: '#FF0000',
-                            fillOpacity: 0.3
-                        }});
-                        selectedPolygon.setMap(map);
-                        sendCoordToStreamlit(lat, lng);
-                        return;
+        // ✅ geojson null 체크 추가
+        if (geojson && geojson.features) {{
+            for (var f of geojson.features) {{
+                var coords = f.geometry.coordinates;
+                for (var polygonSet of coords) {{
+                    for (var ring of polygonSet) {{
+                        if (pointInPolygon([lng, lat], ring)) {{
+                            var path = ring.map(coord =>
+                                new kakao.maps.LatLng(coord[1], coord[0])
+                            );
+                            selectedPolygon = new kakao.maps.Polygon({{
+                                path: path,
+                                strokeWeight: 2,
+                                strokeColor: '#FF0000',
+                                fillColor: '#FF0000',
+                                fillOpacity: 0.3
+                            }});
+                            selectedPolygon.setMap(map);
+                            sendCoordToStreamlit(lat, lng);
+                            return;
+                        }}
                     }}
                 }}
             }}
