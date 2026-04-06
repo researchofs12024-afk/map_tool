@@ -19,28 +19,9 @@ except Exception:
     KAKAO_REST_KEY   = "c5af33c0d1d6a654362d3fea152cc076"
     BUILDING_API_KEY = "9619e124e16b9e57bad6cfefdc82f6c87749176260b4caff32eda964aad5de1b"
 
-# -------------------------------
-# 1️⃣ 로컬 GeoJSON 불러오기 (구별 동적 로드)
-# -------------------------------
-GEOJSON_FILES = {
-    "중구": "서울중구.geojson",
-    "종로구": "서울종로구.geojson",
-}
-
-@st.cache_data(show_spinner=False)
-def load_geojson(gu_name):
-    filename = GEOJSON_FILES.get(gu_name)
-    if not filename:
-        return None
-    try:
-        with open(filename, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
-
 
 # -------------------------------
-# 2️⃣ 카카오 REST / 건축물대장 API
+# 1️⃣ 카카오 REST / 건축물대장 API
 # -------------------------------
 def get_region_code(lat, lng):
     url = "https://dapi.kakao.com/v2/local/geo/coord2regioncode.json"
@@ -101,7 +82,7 @@ def get_building_info(sigungu_cd, bjdong_cd, bun, ji):
 
 
 # -------------------------------
-# 3️⃣ CSS
+# 2️⃣ CSS
 # -------------------------------
 st.markdown("""
 <style>
@@ -150,17 +131,17 @@ st.markdown("""
     <div style="font-size:2.4rem">🏢</div>
     <div>
         <h1>건축물대장 조회 서비스</h1>
-        <p>클릭한 필지가 하이라이트되고 건축물대장 정보를 즉시 조회합니다</p>
+        <p>지도를 클릭하면 건축물대장 정보를 즉시 조회합니다</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 
 # -------------------------------
-# 4️⃣ Session state 초기화
+# 3️⃣ Session state 초기화
 # -------------------------------
 for k, v in [("addr_info", None), ("building_title", None), ("building_basic", None),
-             ("last_coord", ""), ("geojson_str", "null")]:
+             ("last_coord", "")]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -177,10 +158,6 @@ if coord_input and coord_input != st.session_state.last_coord:
         st.session_state.addr_info = addr_doc
 
         if bjd_doc:
-            gu_name = bjd_doc.get("region_2depth_name", "")
-            geojson_data = load_geojson(gu_name)
-            st.session_state.geojson_str = json.dumps(geojson_data) if geojson_data else "null"
-
             b_code  = bjd_doc.get("code", "")
             jibun   = addr_doc.get("address", {}) if addr_doc else {}
             main_no = jibun.get("main_address_no", "0") or "0"
@@ -194,7 +171,7 @@ if coord_input and coord_input != st.session_state.last_coord:
 
 
 # -------------------------------
-# 5️⃣ 레이아웃
+# 4️⃣ 레이아웃
 # -------------------------------
 col_map, col_info = st.columns([6, 4], gap="medium")
 
@@ -211,8 +188,6 @@ html_code = f"""
 <div id="map" style="width:100%;height:520px;border-radius:12px;overflow:hidden;
      box-shadow:0 4px 20px rgba(0,0,0,.12);"></div>
 <script>
-var geojson = {st.session_state.geojson_str};
-
 kakao.maps.load(function() {{
     var map = new kakao.maps.Map(document.getElementById('map'), {{
         center: new kakao.maps.LatLng(37.5636, 126.9976),
@@ -220,21 +195,6 @@ kakao.maps.load(function() {{
     }});
     map.addControl(new kakao.maps.ZoomControl(),    kakao.maps.ControlPosition.RIGHT);
     map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
-
-    var selectedPolygon = null;
-
-    function pointInPolygon(point, vs) {{
-        var x = point[0], y = point[1];
-        var inside = false;
-        for (var i = 0, j = vs.length - 1; i < vs.length; j = i++) {{
-            var xi = vs[i][0], yi = vs[i][1];
-            var xj = vs[j][0], yj = vs[j][1];
-            var intersect = ((yi > y) != (yj > y))
-                && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-            if (intersect) inside = !inside;
-        }}
-        return inside;
-    }}
 
     function sendCoordToStreamlit(lat, lng) {{
         var inputs = window.parent.document.querySelectorAll('input[type="text"]');
@@ -257,38 +217,6 @@ kakao.maps.load(function() {{
     kakao.maps.event.addListener(map, 'click', function(mouseEvent) {{
         var lat = mouseEvent.latLng.getLat();
         var lng = mouseEvent.latLng.getLng();
-
-        if (selectedPolygon) {{
-            selectedPolygon.setMap(null);
-        }}
-
-        // ✅ geojson null 체크 추가
-        if (geojson && geojson.features) {{
-            for (var f of geojson.features) {{
-                var coords = f.geometry.coordinates;
-                for (var polygonSet of coords) {{
-                    for (var ring of polygonSet) {{
-                        if (pointInPolygon([lng, lat], ring)) {{
-                            var path = ring.map(coord =>
-                                new kakao.maps.LatLng(coord[1], coord[0])
-                            );
-                            selectedPolygon = new kakao.maps.Polygon({{
-                                path: path,
-                                strokeWeight: 2,
-                                strokeColor: '#FF0000',
-                                fillColor: '#FF0000',
-                                fillOpacity: 0.3
-                            }});
-                            selectedPolygon.setMap(map);
-                            sendCoordToStreamlit(lat, lng);
-                            return;
-                        }}
-                    }}
-                }}
-            }}
-        }}
-
-        // GeoJSON 범위 밖이어도 건축물대장 조회는 실행
         sendCoordToStreamlit(lat, lng);
     }});
 }});
@@ -308,8 +236,7 @@ with col_info:
         <div class="hint-box">
             <div class="icon">🗺️</div>
             <strong>지도를 클릭해 필지를 선택하세요</strong><br>
-            클릭한 필지가 <span style="color:#E53E3E;font-weight:700">붉은색</span>으로 하이라이트되고<br>
-            건축물대장 정보가 표시됩니다
+            클릭한 위치의 건축물대장 정보가 표시됩니다
         </div>""", unsafe_allow_html=True)
     else:
         addr_doc = st.session_state.addr_info
@@ -389,5 +316,4 @@ with col_info:
             for k in ["addr_info", "building_title", "building_basic"]:
                 st.session_state[k] = None
             st.session_state.last_coord = ""
-            st.session_state.geojson_str = "null"
             st.rerun()
